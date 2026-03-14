@@ -980,7 +980,8 @@ where
     T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
     S: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
 {
-    if src1.rows != src1.cols || src1.channels != 1 || src2.channels != 1 || src1.rows != src2.rows {
+    if src1.rows != src1.cols || src1.channels != 1 || src2.channels != 1 || src1.rows != src2.rows
+    {
         return Err(PureCvError::InvalidDimensions(
             "Linear system solver requires compatible single-channel matrices".to_string(),
         ));
@@ -1101,9 +1102,21 @@ mod tests {
         // Check solution: A*X = B
         // Manual calculation for this system: x=27, y=-22, z=6
         // Output for solving with b as 3x1 matrix with 1 column should be in x.data
-        assert!((x.data[0] - 27.0).abs() < 1e-10, "x failed: expected 27.0, got {}", x.data[0]);
-        assert!((x.data[1] - (-22.0)).abs() < 1e-10, "y failed: expected -22.0, got {}", x.data[1]);
-        assert!((x.data[2] - 6.0).abs() < 1e-10, "z failed: expected 6.0, got {}", x.data[2]);
+        assert!(
+            (x.data[0] - 27.0).abs() < 1e-10,
+            "x failed: expected 27.0, got {}",
+            x.data[0]
+        );
+        assert!(
+            (x.data[1] - (-22.0)).abs() < 1e-10,
+            "y failed: expected -22.0, got {}",
+            x.data[1]
+        );
+        assert!(
+            (x.data[2] - 6.0).abs() < 1e-10,
+            "z failed: expected 6.0, got {}",
+            x.data[2]
+        );
     }
 
     #[test]
