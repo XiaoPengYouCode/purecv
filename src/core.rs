@@ -47,7 +47,10 @@ pub mod utils;
 mod tests;
 
 // Re-exports for easier access
-pub use self::arithm::{bitwise_and, bitwise_not, bitwise_or, bitwise_xor};
+pub use self::arithm::{
+    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, check_range, cross, dot, gemm, set_identity,
+    trace, GEMM_1_T, GEMM_2_T, GEMM_3_T,
+};
 pub use self::error::{PureCvError, Result};
 pub use self::matrix::{
     DataType, Depth, MatType, Matrix, CV_16S, CV_16SC1, CV_16SC2, CV_16SC3, CV_16SC4, CV_16U,
