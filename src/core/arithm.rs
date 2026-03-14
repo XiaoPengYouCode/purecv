@@ -772,8 +772,8 @@ where
 
     for i in 0..n {
         let base_idx = (i * cols + i) * channels;
-        for c in 0..channels {
-            sum[c] += src.data[base_idx + c].to_f64().unwrap_or(0.0);
+        for (c, s) in sum.iter_mut().enumerate().take(channels) {
+            *s += src.data[base_idx + c].to_f64().unwrap_or(0.0);
         }
     }
 
@@ -1065,8 +1065,8 @@ where
             x[i] /= a[i * n + i];
         }
 
-        for i in 0..n {
-            dst.data[i * m + col] = x[i];
+        for (i, val) in x.iter().enumerate().take(n) {
+            dst.data[i * m + col] = *val;
         }
     }
 
