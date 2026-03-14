@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-03-14
+
+### ⚙️ Miscellaneous Tasks
+
+- Fix clippy warnings in src/core/matrix.rs
+- Update repository URL in Cargo.toml and add changelog and CI release configuration files
+- Pushing correct github release script
+- Add simd feature to Cargo.toml and update CI workflow for dev branch
+
+### 📚 Documentation
+
+- Add CONTRIBUTING and MAINTAINERS guidelines
+
+### 🚀 Features
+
+- Implement MatType and DataType for OpenCV parity
+
 ## [0.1.0] - 2026-03-10
 
 ## Overview
