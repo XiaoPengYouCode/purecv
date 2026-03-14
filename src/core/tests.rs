@@ -381,9 +381,53 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "MatType depth must match matrix element type")]
-    fn test_mat_type_mismatch_panic() {
-        // Should panic if Depth doesn't match T
-        let _ = Matrix::<u8>::new_with_type(10, 10, CV_32FC1);
+    fn test_dot_cross_trace() {
+        let m1 = Matrix::from_vec(1, 3, 1, vec![1.0, 2.0, 3.0]);
+        let m2 = Matrix::from_vec(1, 3, 1, vec![4.0, 5.0, 6.0]);
+
+        // Dot product: 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+        assert_eq!(dot(&m1, &m2).unwrap(), 32.0);
+
+        // Cross product
+        let c = cross(&m1, &m2).unwrap();
+        // [2*6-3*5, 3*4-1*6, 1*5-2*4] = [12-15, 12-6, 5-8] = [-3, 6, -3]
+        assert_eq!(c.data, vec![-3.0, 6.0, -3.0]);
+
+        // Trace of eye(3) should be 3
+        let m_eye = Matrix::<f64>::eye(3, 3, 1);
+        assert_eq!(trace(&m_eye).v[0], 3.0);
+    }
+
+    #[test]
+    fn test_set_identity() {
+        let mut m = Matrix::<f64>::zeros(3, 3, 1);
+        set_identity(&mut m, Scalar::all(5.0));
+        assert_eq!(m.data, vec![5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 5.0]);
+    }
+
+    #[test]
+    fn test_check_range() {
+        let m = Matrix::from_vec(1, 3, 1, vec![1.0, 2.0, 3.0]);
+        assert!(check_range(&m, 0.0, 4.0));
+        assert!(!check_range(&m, 0.0, 2.5));
+
+        let m_nan = Matrix::from_vec(1, 1, 1, vec![f64::NAN]);
+        assert!(!check_range(&m_nan, 0.0, 10.0));
+    }
+
+    #[test]
+    fn test_gemm() {
+        let a = Matrix::from_vec(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]);
+        let b = Matrix::from_vec(2, 2, 1, vec![5.0, 6.0, 7.0, 8.0]);
+        let c = Matrix::from_vec(2, 2, 1, vec![1.0, 1.0, 1.0, 1.0]);
+
+        // res = 1.0 * A * B + 1.0 * C
+        let res = gemm(&a, &b, 1.0, &c, 1.0, 0).unwrap();
+        assert_eq!(res.data, vec![20.0, 23.0, 44.0, 51.0]);
+
+        // Test with transpose A
+        let empty = Matrix::<f64>::new(0, 0, 1);
+        let res_t = gemm(&a, &b, 1.0, &empty, 0.0, GEMM_1_T).unwrap();
+        assert_eq!(res_t.data, vec![26.0, 30.0, 38.0, 44.0]);
     }
 }

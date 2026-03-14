@@ -36,6 +36,7 @@
 
 use crate::core::error::{PureCvError, Result};
 use crate::core::Matrix;
+use crate::core::types::Scalar;
 use num_traits::{Bounded, FromPrimitive, Num, ToPrimitive};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -443,4 +444,249 @@ where
     });
 
     Ok(dst)
+}
+
+pub const GEMM_1_T: i32 = 1;
+pub const GEMM_2_T: i32 = 2;
+pub const GEMM_3_T: i32 = 4;
+
+/// Performs generalized matrix multiplication.
+///
+/// dst = alpha * op(src1) * op(src2) + beta * op(src3)
+/// where op(X) is X or X^T based on flags.
+pub fn gemm<T>(
+    src1: &Matrix<T>,
+    src2: &Matrix<T>,
+    alpha: f64,
+    src3: &Matrix<T>,
+    beta: f64,
+    flags: i32,
+) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + ToPrimitive + FromPrimitive + Default + 'static,
+{
+    let trans1 = (flags & GEMM_1_T) != 0;
+    let trans2 = (flags & GEMM_2_T) != 0;
+    let trans3 = (flags & GEMM_3_T) != 0;
+
+    let (m, k1) = if trans1 {
+        (src1.cols, src1.rows)
+    } else {
+        (src1.rows, src1.cols)
+    };
+    let (k2, n) = if trans2 {
+        (src2.cols, src2.rows)
+    } else {
+        (src2.rows, src2.cols)
+    };
+
+    if k1 != k2 {
+        return Err(PureCvError::InvalidDimensions(format!(
+            "Incompatible dimensions for GEMM: {}x{} and {}x{}",
+            m, k1, k2, n
+        )));
+    }
+
+    let k = k1;
+    let mut dst = Matrix::<T>::new(m, n, src1.channels);
+
+    #[cfg(feature = "parallel")]
+    {
+        dst.data
+            .par_chunks_mut(n * src1.channels)
+            .enumerate()
+            .for_each(|(i, row_slice)| {
+                for j in 0..n {
+                    for c in 0..src1.channels {
+                        let mut sum = 0.0;
+                        for l in 0..k {
+                            let idx1 = if trans1 {
+                                (l * src1.cols + i) * src1.channels + c
+                            } else {
+                                (i * src1.cols + l) * src1.channels + c
+                            };
+                            let idx2 = if trans2 {
+                                (j * src2.cols + l) * src2.channels + c
+                            } else {
+                                (l * src2.cols + j) * src2.channels + c
+                            };
+
+                            let v1 = src1.data[idx1].to_f64().unwrap_or(0.0);
+                            let v2 = src2.data[idx2].to_f64().unwrap_or(0.0);
+                            sum += v1 * v2;
+                        }
+
+                        let v3 = if beta != 0.0 && src3.rows > 0 {
+                            let (r3, c3) = if trans3 { (j, i) } else { (i, j) };
+                            let idx3 = (r3 * src3.cols + c3) * src3.channels + c;
+                            src3.data[idx3].to_f64().unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+
+                        let final_val = alpha * sum + beta * v3;
+                        row_slice[j * src1.channels + c] =
+                            T::from_f64(final_val).unwrap_or(T::zero());
+                    }
+                }
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for i in 0..m {
+            for j in 0..n {
+                for c in 0..src1.channels {
+                    let mut sum = 0.0;
+                    for l in 0..k {
+                        let idx1 = if trans1 {
+                            (l * src1.cols + i) * src1.channels + c
+                        } else {
+                            (i * src1.cols + l) * src1.channels + c
+                        };
+                        let idx2 = if trans2 {
+                            (j * src2.cols + l) * src2.channels + c
+                        } else {
+                            (l * src2.cols + j) * src2.channels + c
+                        };
+
+                        let v1 = src1.data[idx1].to_f64().unwrap_or(0.0);
+                        let v2 = src2.data[idx2].to_f64().unwrap_or(0.0);
+                        sum += v1 * v2;
+                    }
+
+                    let v3 = if beta != 0.0 && src3.rows > 0 {
+                        let (r3, c3) = if trans3 { (j, i) } else { (i, j) };
+                        let idx3 = (r3 * src3.cols + c3) * src3.channels + c;
+                        src3.data[idx3].to_f64().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+
+                    let final_val = alpha * sum + beta * v3;
+                    dst.set(i, j, c, T::from_f64(final_val).unwrap_or(T::zero()));
+                }
+            }
+        }
+    }
+
+    Ok(dst)
+}
+
+/// Sets the matrix elements to 0, except for the diagonal which is set to a given value.
+///
+/// mtx = identity * s
+pub fn set_identity<T>(mtx: &mut Matrix<T>, s: Scalar<T>)
+where
+    T: Num + Copy + Send + Sync + Default + 'static,
+{
+    mtx.data.fill(T::zero());
+    let n = std::cmp::min(mtx.rows, mtx.cols);
+    let channels = mtx.channels;
+    let cols = mtx.cols;
+
+    for i in 0..n {
+        let base_idx = (i * cols + i) * channels;
+        for c in 0..channels {
+            mtx.data[base_idx + c] = s.v[c];
+        }
+    }
+}
+
+/// Checks if every array element is within a specified range.
+pub fn check_range<T>(src: &Matrix<T>, min_val: f64, max_val: f64) -> bool
+where
+    T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
+{
+    src.data.iter().all(|&val| {
+        let v = val.to_f64().unwrap_or(0.0);
+        v >= min_val && v <= max_val
+    })
+}
+
+/// Computes the scalar dot product of two matrices (vectors).
+pub fn dot<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<f64>
+where
+    T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
+{
+    if src1.data.len() != src2.data.len() {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same number of elements".to_string(),
+        ));
+    }
+
+    #[cfg(feature = "parallel")]
+    {
+        let sum: f64 = src1
+            .data
+            .par_iter()
+            .zip(src2.data.par_iter())
+            .map(|(&v1, &v2)| v1.to_f64().unwrap_or(0.0) * v2.to_f64().unwrap_or(0.0))
+            .sum();
+        Ok(sum)
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        let sum: f64 = src1
+            .data
+            .iter()
+            .zip(src2.data.iter())
+            .map(|(&v1, &v2)| v1.to_f64().unwrap_or(0.0) * v2.to_f64().unwrap_or(0.0))
+            .sum();
+        Ok(sum)
+    }
+}
+
+/// Computes the 3D cross product of two vectors.
+pub fn cross<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + Default + 'static,
+{
+    let len1 = src1.rows * src1.cols * src1.channels;
+    let len2 = src2.rows * src2.cols * src2.channels;
+
+    if len1 != 3 || len2 != 3 {
+        return Err(PureCvError::InvalidDimensions(
+            "Cross product requires 3-element vectors".to_string(),
+        ));
+    }
+
+    let min_rows_cols = if src1.rows == 3 {
+        (3, 1)
+    } else if src1.cols == 3 {
+        (1, 3)
+    } else {
+        (1, 1)
+    };
+
+    let v1 = [src1.data[0], src1.data[1], src1.data[2]];
+    let v2 = [src2.data[0], src2.data[1], src2.data[2]];
+
+    let mut dst = Matrix::<T>::new(min_rows_cols.0, min_rows_cols.1, src1.channels);
+    dst.data[0] = v1[1] * v2[2] - v1[2] * v2[1];
+    dst.data[1] = v1[2] * v2[0] - v1[0] * v2[2];
+    dst.data[2] = v1[0] * v2[1] - v1[1] * v2[0];
+
+    Ok(dst)
+}
+
+/// Returns the sum of diagonal elements of a matrix.
+pub fn trace<T>(src: &Matrix<T>) -> Scalar<f64>
+where
+    T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
+{
+    let n = std::cmp::min(src.rows, src.cols);
+    let channels = src.channels;
+    let cols = src.cols;
+    let mut sum = [0.0; 4];
+
+    for i in 0..n {
+        let base_idx = (i * cols + i) * channels;
+        for c in 0..channels {
+            sum[c] += src.data[base_idx + c].to_f64().unwrap_or(0.0);
+        }
+    }
+
+    Scalar { v: sum }
 }
