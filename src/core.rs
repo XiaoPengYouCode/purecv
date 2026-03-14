@@ -48,8 +48,8 @@ mod tests;
 
 // Re-exports for easier access
 pub use self::arithm::{
-    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, check_range, cross, dot, gemm, set_identity,
-    trace, GEMM_1_T, GEMM_2_T, GEMM_3_T,
+    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, check_range, cross, determinant, dot, gemm,
+    invert, set_identity, solve, trace, DecompTypes, GEMM_1_T, GEMM_2_T, GEMM_3_T,
 };
 pub use self::error::{PureCvError, Result};
 pub use self::matrix::{
