@@ -35,8 +35,8 @@
  */
 
 use crate::core::error::{PureCvError, Result};
-use crate::core::Matrix;
 use crate::core::types::Scalar;
+use crate::core::Matrix;
 use num_traits::{Bounded, FromPrimitive, Num, ToPrimitive};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
