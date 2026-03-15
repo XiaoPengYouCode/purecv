@@ -22,6 +22,9 @@ ndarray = { version = "0.15", optional = true }
 # or you can stick to your custom Matrix implementation.
 num-traits = "0.2"
 
+# SIMD: Safe, portable SIMD abstraction (x86 SSE/AVX, ARM NEON, WASM simd128)
+pulp = { version = "0.18", optional = true }
+
 
 # Logging/Tracing for debugging algorithms
 log = "0.4"
@@ -36,7 +39,7 @@ default = ["std", "parallel"]
 std = []
 parallel = ["rayon"]
 ndarray = ["dep:ndarray"]
-simd = []
+simd = ["dep:pulp"]
 
 # Feature for WASM specific optimizations
 wasm = []

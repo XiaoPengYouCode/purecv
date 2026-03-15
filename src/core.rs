@@ -38,6 +38,7 @@ pub mod arithm;
 pub mod error;
 pub mod matrix;
 pub mod rng;
+pub(crate) mod simd;
 pub mod structural;
 pub mod types;
 pub mod utils;
