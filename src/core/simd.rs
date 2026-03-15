@@ -769,6 +769,321 @@ mod tests {
             f32::simd_convert_scale_abs(&mut dst, &src, 10.0, 0.0);
             assert_eq!(dst, vec![10, 20, 30, 40]);
         }
+
+        // ---------------------------------------------------------------
+        //  SIMD vs scalar equivalence tests
+        // ---------------------------------------------------------------
+
+        /// Helper: compute element-wise add in pure scalar Rust
+        fn scalar_add_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
+            a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect()
+        }
+
+        /// Helper: compute element-wise sub in pure scalar Rust
+        fn scalar_sub_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
+            a.iter().zip(b.iter()).map(|(&x, &y)| x - y).collect()
+        }
+
+        /// Helper: compute element-wise mul in pure scalar Rust
+        fn scalar_mul_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
+            a.iter().zip(b.iter()).map(|(&x, &y)| x * y).collect()
+        }
+
+        /// Helper: compute element-wise div in pure scalar Rust (0/0 = 0)
+        fn scalar_div_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
+            a.iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| if y != 0.0 { x / y } else { 0.0 })
+                .collect()
+        }
+
+        /// Helper: compute dot product in pure scalar Rust
+        fn scalar_dot_f32(a: &[f32], b: &[f32]) -> f64 {
+            a.iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| x as f64 * y as f64)
+                .sum()
+        }
+
+        /// Helper: compute sum in pure scalar Rust
+        fn scalar_sum_f32(src: &[f32]) -> f64 {
+            src.iter().map(|&v| v as f64).sum()
+        }
+
+        /// Generate a non-trivial f32 test vector
+        fn make_test_vec_f32(len: usize) -> Vec<f32> {
+            (0..len).map(|i| (i as f32 * 0.7) - 50.0).collect()
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_add_f32() {
+            let a = make_test_vec_f32(1024);
+            let b: Vec<f32> = (0..1024).map(|i| (i as f32) * 1.3 + 2.0).collect();
+            let expected = scalar_add_f32(&a, &b);
+            let mut simd_result = vec![0.0f32; 1024];
+            assert!(f32::simd_add(&mut simd_result, &a, &b));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-5,
+                    "Mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sub_f32() {
+            let a = make_test_vec_f32(1024);
+            let b: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.3).collect();
+            let expected = scalar_sub_f32(&a, &b);
+            let mut simd_result = vec![0.0f32; 1024];
+            assert!(f32::simd_sub(&mut simd_result, &a, &b));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-5,
+                    "Mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_mul_f32() {
+            let a = make_test_vec_f32(512);
+            let b: Vec<f32> = (0..512).map(|i| (i as f32) * 0.01 + 0.5).collect();
+            let expected = scalar_mul_f32(&a, &b);
+            let mut simd_result = vec![0.0f32; 512];
+            assert!(f32::simd_mul(&mut simd_result, &a, &b));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-3,
+                    "Mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_div_f32() {
+            let a = make_test_vec_f32(256);
+            let mut b: Vec<f32> = (0..256).map(|i| (i as f32) * 0.5 + 1.0).collect();
+            b[100] = 0.0; // test division by zero
+            let expected = scalar_div_f32(&a, &b);
+            let mut simd_result = vec![0.0f32; 256];
+            assert!(f32::simd_div(&mut simd_result, &a, &b));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-3,
+                    "Mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_dot_f32() {
+            let a = make_test_vec_f32(2048);
+            let b: Vec<f32> = (0..2048).map(|i| (i as f32) * 0.3 - 100.0).collect();
+            let expected = scalar_dot_f32(&a, &b);
+            let simd_result = f32::simd_dot(&a, &b).unwrap();
+            assert!(
+                (expected - simd_result).abs() < 1e-2,
+                "Dot mismatch: expected {expected}, got {simd_result}"
+            );
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sum_f32() {
+            let src = make_test_vec_f32(4096);
+            let expected = scalar_sum_f32(&src);
+            let simd_result = f32::simd_sum(&src).unwrap();
+            assert!(
+                (expected - simd_result).abs() < 1e-1,
+                "Sum mismatch: expected {expected}, got {simd_result}"
+            );
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sqrt_f32() {
+            let src: Vec<f32> = (0..512).map(|i| (i as f32) * 2.0 + 1.0).collect();
+            let expected: Vec<f32> = src.iter().map(|&v| v.sqrt()).collect();
+            let mut simd_result = vec![0.0f32; 512];
+            assert!(f32::simd_sqrt(&mut simd_result, &src));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-5,
+                    "Sqrt mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_min_max_f32() {
+            let a = make_test_vec_f32(256);
+            let b: Vec<f32> = (0..256).map(|i| (i as f32) * 0.5 - 30.0).collect();
+
+            // min
+            let expected_min: Vec<f32> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| if x < y { x } else { y })
+                .collect();
+            let mut simd_min_result = vec![0.0f32; 256];
+            assert!(f32::simd_min(&mut simd_min_result, &a, &b));
+            assert_eq!(simd_min_result, expected_min);
+
+            // max
+            let expected_max: Vec<f32> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| if x > y { x } else { y })
+                .collect();
+            let mut simd_max_result = vec![0.0f32; 256];
+            assert!(f32::simd_max(&mut simd_max_result, &a, &b));
+            assert_eq!(simd_max_result, expected_max);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_magnitude_f32() {
+            let x: Vec<f32> = (0..128).map(|i| (i as f32) * 0.5).collect();
+            let y: Vec<f32> = (0..128).map(|i| (i as f32) * 0.3 + 1.0).collect();
+            let expected: Vec<f32> = x
+                .iter()
+                .zip(y.iter())
+                .map(|(&xv, &yv)| (xv * xv + yv * yv).sqrt())
+                .collect();
+            let mut simd_result = vec![0.0f32; 128];
+            assert!(f32::simd_magnitude(&mut simd_result, &x, &y));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-4,
+                    "Magnitude mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_add_weighted_f32() {
+            let a = make_test_vec_f32(256);
+            let b: Vec<f32> = (0..256).map(|i| (i as f32) * 0.2 + 3.0).collect();
+            let alpha = 0.6f64;
+            let beta = 0.4f64;
+            let gamma = 2.5f64;
+            let expected: Vec<f32> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&av, &bv)| (av as f64 * alpha + bv as f64 * beta + gamma) as f32)
+                .collect();
+            let mut simd_result = vec![0.0f32; 256];
+            assert!(f32::simd_add_weighted(
+                &mut simd_result,
+                &a,
+                &b,
+                alpha,
+                beta,
+                gamma,
+            ));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-3,
+                    "AddWeighted mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_convert_scale_abs_f32() {
+            let src: Vec<f32> = (0..256).map(|i| (i as f32) * 0.5 - 64.0).collect();
+            let alpha = 2.0f64;
+            let beta = 10.0f64;
+            let expected: Vec<u8> = src
+                .iter()
+                .map(|&v| {
+                    let val = ((v as f64) * alpha + beta).abs();
+                    val.clamp(0.0, 255.0).round() as u8
+                })
+                .collect();
+            let mut simd_result = vec![0u8; 256];
+            assert!(f32::simd_convert_scale_abs(
+                &mut simd_result,
+                &src,
+                alpha,
+                beta,
+            ));
+            assert_eq!(simd_result, expected);
+        }
+
+        // --- f64 equivalence tests ---
+
+        #[test]
+        fn test_simd_vs_scalar_add_f64() {
+            let a: Vec<f64> = (0..512).map(|i| (i as f64) * 0.7 - 100.0).collect();
+            let b: Vec<f64> = (0..512).map(|i| (i as f64) * 1.3 + 50.0).collect();
+            let expected: Vec<f64> = a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect();
+            let mut simd_result = vec![0.0f64; 512];
+            assert!(f64::simd_add(&mut simd_result, &a, &b));
+            assert_eq!(simd_result, expected);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_dot_f64() {
+            let a: Vec<f64> = (0..1024).map(|i| (i as f64) * 0.3 - 100.0).collect();
+            let b: Vec<f64> = (0..1024).map(|i| (i as f64) * 0.7 + 20.0).collect();
+            let expected: f64 = a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum();
+            let simd_result = f64::simd_dot(&a, &b).unwrap();
+            assert!(
+                (expected - simd_result).abs() < 1e-6,
+                "f64 dot mismatch: expected {expected}, got {simd_result}"
+            );
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sum_f64() {
+            let src: Vec<f64> = (0..2048).map(|i| (i as f64) * 0.3 - 300.0).collect();
+            let expected: f64 = src.iter().sum();
+            let simd_result = f64::simd_sum(&src).unwrap();
+            assert!(
+                (expected - simd_result).abs() < 1e-6,
+                "f64 sum mismatch: expected {expected}, got {simd_result}"
+            );
+        }
+
+        // --- u8 equivalence tests ---
+
+        #[test]
+        fn test_simd_vs_scalar_add_u8_equiv() {
+            let a: Vec<u8> = (0..256).map(|i| i as u8).collect();
+            let b: Vec<u8> = (0..256).map(|i| (255 - i) as u8).collect();
+            let expected: Vec<u8> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| x.saturating_add(y))
+                .collect();
+            let mut simd_result = vec![0u8; 256];
+            assert!(u8::simd_add(&mut simd_result, &a, &b));
+            assert_eq!(simd_result, expected);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sub_u8_equiv() {
+            let a: Vec<u8> = (0..256).map(|i| i as u8).collect();
+            let b: Vec<u8> = (0..256).map(|i| (i / 2) as u8).collect();
+            let expected: Vec<u8> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| x.saturating_sub(y))
+                .collect();
+            let mut simd_result = vec![0u8; 256];
+            assert!(u8::simd_sub(&mut simd_result, &a, &b));
+            assert_eq!(simd_result, expected);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_sum_u8_equiv() {
+            let src: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
+            let expected: f64 = src.iter().map(|&v| v as f64).sum();
+            let simd_result = u8::simd_sum(&src).unwrap();
+            assert!(
+                (expected - simd_result).abs() < 1e-10,
+                "u8 sum mismatch: expected {expected}, got {simd_result}"
+            );
+        }
     }
 
     #[cfg(not(feature = "simd"))]

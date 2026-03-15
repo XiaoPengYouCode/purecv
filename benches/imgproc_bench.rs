@@ -37,8 +37,10 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use purecv::core::types::BorderTypes;
 use purecv::core::{Matrix, Point2i, Size2i};
-use purecv::imgproc::derivatives::{scharr, sobel};
-use purecv::imgproc::filter::box_filter;
+use purecv::imgproc::derivatives::{laplacian, scharr, sobel};
+use purecv::imgproc::edge::canny;
+use purecv::imgproc::filter::{box_filter, gaussian_blur};
+use purecv::imgproc::threshold::{threshold, ThresholdTypes};
 use purecv::imgproc::{cvt_color, ColorConversionCode};
 
 fn bench_imgproc(c: &mut Criterion) {
@@ -86,6 +88,78 @@ fn bench_imgproc(c: &mut Criterion) {
     // scharr benchmark setup
     c.bench_function("scharr_x_1024x1024", |b| {
         b.iter(|| scharr(black_box(&img_gray), 1, 0, 1.0, 0.0, BorderTypes::default()).unwrap())
+    });
+
+    // --- New benchmarks ---
+
+    // threshold binary (u8)
+    let mut img_gray_u8 = Matrix::<u8>::new(size, size, 1);
+    for (i, v) in img_gray_u8.data.iter_mut().enumerate() {
+        *v = (i % 256) as u8;
+    }
+
+    c.bench_function("threshold_binary_1024x1024_u8", |b| {
+        b.iter(|| {
+            threshold(
+                black_box(&img_gray_u8),
+                128.0,
+                255.0,
+                ThresholdTypes::THRESH_BINARY,
+            )
+            .unwrap()
+        })
+    });
+
+    // cvt_color BGR to gray
+    let img_bgr = Matrix::<u8>::new(size, size, 3);
+
+    c.bench_function("cvt_color_bgr2gray_1024x1024", |b| {
+        b.iter(|| cvt_color(black_box(&img_bgr), ColorConversionCode::COLOR_BGR2GRAY).unwrap())
+    });
+
+    // cvt_color RGBA to gray
+    let img_rgba = Matrix::<u8>::new(size, size, 4);
+
+    c.bench_function("cvt_color_rgba2gray_1024x1024", |b| {
+        b.iter(|| cvt_color(black_box(&img_rgba), ColorConversionCode::COLOR_RGBA2GRAY).unwrap())
+    });
+
+    // gaussian_blur 3x3
+    c.bench_function("gaussian_blur_3x3_1024x1024", |b| {
+        b.iter(|| {
+            gaussian_blur(
+                black_box(&img_gray),
+                Size2i::new(3, 3),
+                1.0,
+                0.0,
+                BorderTypes::default(),
+            )
+            .unwrap()
+        })
+    });
+
+    // gaussian_blur 5x5
+    c.bench_function("gaussian_blur_5x5_1024x1024", |b| {
+        b.iter(|| {
+            gaussian_blur(
+                black_box(&img_gray),
+                Size2i::new(5, 5),
+                1.0,
+                0.0,
+                BorderTypes::default(),
+            )
+            .unwrap()
+        })
+    });
+
+    // laplacian 3x3
+    c.bench_function("laplacian_3x3_1024x1024", |b| {
+        b.iter(|| laplacian(black_box(&img_gray), 3, 1.0, 0.0, BorderTypes::default()).unwrap())
+    });
+
+    // canny edge detection (u8 single-channel)
+    c.bench_function("canny_1024x1024", |b| {
+        b.iter(|| canny(black_box(&img_gray_u8), 50.0, 150.0, 3, false).unwrap())
     });
 }
 

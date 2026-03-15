@@ -35,7 +35,11 @@
  */
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use purecv::core::arithm::{add, divide, multiply, subtract};
+use purecv::core::arithm::{
+    absdiff, add, add_weighted, bitwise_and, convert_scale_abs, divide, dot, gemm, magnitude, mean,
+    min, multiply, norm, normalize, sqrt, subtract, sum,
+};
+use purecv::core::types::NormTypes;
 use purecv::core::Matrix;
 
 fn bench_arithm(c: &mut Criterion) {
@@ -61,6 +65,109 @@ fn bench_arithm(c: &mut Criterion) {
 
     c.bench_function("matrix_div_1024x1024x3_f32", |b| {
         b.iter(|| divide(black_box(&m1), black_box(&m2)).unwrap())
+    });
+
+    // --- New benchmarks ---
+
+    // dot product (1-channel for reduction benchmark)
+    let mut v1 = Matrix::<f32>::new(size, size, 1);
+    let mut v2 = Matrix::<f32>::new(size, size, 1);
+    v1.data.fill(1.5);
+    v2.data.fill(2.5);
+
+    c.bench_function("dot_1024x1024_f32", |b| {
+        b.iter(|| dot(black_box(&v1), black_box(&v2)).unwrap())
+    });
+
+    // magnitude: sqrt(x^2 + y^2)
+    c.bench_function("magnitude_1024x1024_f32", |b| {
+        let mut dst = Matrix::<f32>::new(size, size, 1);
+        b.iter(|| magnitude(black_box(&v1), black_box(&v2), &mut dst).unwrap())
+    });
+
+    // norm L2
+    c.bench_function("norm_l2_1024x1024_f32", |b| {
+        b.iter(|| norm(black_box(&v1), NormTypes::L2, None).unwrap())
+    });
+
+    // add_weighted (FMA: dst = a*alpha + b*beta + gamma)
+    c.bench_function("add_weighted_1024x1024_f32", |b| {
+        b.iter(|| add_weighted(black_box(&m1), 0.7, black_box(&m2), 0.3, 1.0).unwrap())
+    });
+
+    // convert_scale_abs: dst = |src * alpha + beta|, clamped to u8
+    c.bench_function("convert_scale_abs_1024x1024_f32", |b| {
+        b.iter(|| convert_scale_abs(black_box(&v1), 10.0, 5.0).unwrap())
+    });
+
+    // sum (reduction)
+    c.bench_function("sum_1024x1024_f32", |b| b.iter(|| sum(black_box(&v1))));
+
+    // mean (sum + divide)
+    c.bench_function("mean_1024x1024_f32", |b| b.iter(|| mean(black_box(&v1))));
+
+    // bitwise_and (u8)
+    let mut u1 = Matrix::<u8>::new(size, size, 1);
+    let mut u2 = Matrix::<u8>::new(size, size, 1);
+    u1.data.fill(0xAA);
+    u2.data.fill(0x55);
+
+    c.bench_function("bitwise_and_1024x1024_u8", |b| {
+        b.iter(|| bitwise_and(black_box(&u1), black_box(&u2)).unwrap())
+    });
+
+    // min / max (element-wise)
+    c.bench_function("min_1024x1024x3_f32", |b| {
+        b.iter(|| min(black_box(&m1), black_box(&m2)).unwrap())
+    });
+
+    // absdiff
+    c.bench_function("absdiff_1024x1024x3_f32", |b| {
+        b.iter(|| absdiff(black_box(&m1), black_box(&m2)).unwrap())
+    });
+
+    // normalize (MINMAX)
+    c.bench_function("normalize_1024x1024_f32", |b| {
+        let mut dst = Matrix::<f32>::new(size, size, 1);
+        b.iter(|| {
+            normalize(
+                black_box(&v1),
+                &mut dst,
+                0.0,
+                1.0,
+                NormTypes::MinMax,
+                -1,
+                None,
+            )
+            .unwrap()
+        })
+    });
+
+    // sqrt (unary math)
+    c.bench_function("sqrt_1024x1024_f32", |b| {
+        b.iter(|| sqrt(black_box(&v1)).unwrap())
+    });
+
+    // gemm (smaller size: 256x256)
+    let gemm_size = 256;
+    let mut gm1 = Matrix::<f32>::new(gemm_size, gemm_size, 1);
+    let mut gm2 = Matrix::<f32>::new(gemm_size, gemm_size, 1);
+    let gm3 = Matrix::<f32>::new(gemm_size, gemm_size, 1);
+    gm1.data.fill(1.0);
+    gm2.data.fill(1.0);
+
+    c.bench_function("gemm_256x256_f32", |b| {
+        b.iter(|| {
+            gemm(
+                black_box(&gm1),
+                black_box(&gm2),
+                1.0,
+                black_box(&gm3),
+                0.0,
+                0,
+            )
+            .unwrap()
+        })
     });
 }
 

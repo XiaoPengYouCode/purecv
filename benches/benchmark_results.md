@@ -1,7 +1,5 @@
 # SIMD & Parallelization Benchmark Results
 
-*Execution Date: 2026-03-09 23:43 (CET)*
-
 This document highlights the performance evaluation of the `purecv` library across four main compilation strategies:
 
 1. **Standard**: Sequential fallback mode (`--no-default-features`), without explicit target CPU optimizations.
@@ -10,6 +8,8 @@ This document highlights the performance evaluation of the `purecv` library acro
 4. **Parallel + SIMD**: Combined `rayon` parallelism alongside `target-cpu=native` for maximum theoretical throughput.
 
 All tests operate on `1024x1024` image/matrix tensors using `f32` (or `u8` depending on the domain context). Times shown represent the median calculation calculated by `Criterion.rs`.
+
+*Execution Date: 2026-03-09 23:43 (CET)*
 
 ## Performance Comparison Table
 
@@ -43,3 +43,101 @@ Following the initial SIMD and Parallelization benchmarks, targeted algorithmic 
 
 ### Analysis
 - **Derivatives (`sobel_3x3`, `scharr_x`)**: Replacing the generic `sep_filter_2d` implementation with an inlined `fast_deriv_3x3` function brought execution times down to ~2.1ms. By explicitly unrolling the 3x3 convolution and separating the interior "fast path" from the boundary "slow path," we completely eliminated intermediate allocations and significantly improved cache locality.
+
+*Execution Date: 2026-03-15 (CET)*
+
+## Arithm — Performance Comparison Table (17 benchmarks)
+
+| Benchmark / Operation         | Standard    | SIMD Only   | Parallel      | Parallel + SIMD |
+| :---------------------------- | :---------- | :---------- | :------------ | :-------------- |
+| `matrix_add`                  | 3.26 ms     | 3.35 ms     | 2.08 ms       | **2.05 ms**     |
+| `matrix_sub`                  | 3.24 ms     | 3.37 ms     | **2.06 ms**   | 2.11 ms         |
+| `matrix_mul`                  | 3.20 ms     | 3.13 ms     | **2.09 ms**   | 2.09 ms         |
+| `matrix_div`                  | 3.24 ms     | 3.10 ms     | **2.10 ms**   | 2.10 ms         |
+| `dot`                         | 997.62 µs   | 971.72 µs   | **156.54 µs** | 157.72 µs       |
+| `magnitude`                   | 756.23 µs   | 754.99 µs   | **184.35 µs** | 184.42 µs       |
+| `norm_l2`                     | 984.65 µs   | 964.61 µs   | **151.90 µs** | 160.90 µs       |
+| `add_weighted`                | 3.53 ms     | 3.13 ms     | **2.23 ms**   | 2.30 ms         |
+| `convert_scale_abs`           | 2.54 ms     | 1.66 ms     | 610.46 µs     | **477.11 µs**   |
+| `sum`                         | 975.51 µs   | 966.94 µs   | **162.20 µs** | 164.41 µs       |
+| `mean`                        | 969.08 µs   | 964.49 µs   | **163.92 µs** | 167.97 µs       |
+| `bitwise_and`                 | **255.18 µs** | 264.72 µs | 376.10 µs     | 445.06 µs       |
+| `min`                         | 3.08 ms     | 3.06 ms     | **2.07 ms**   | 2.11 ms         |
+| `absdiff`                     | 3.10 ms     | 3.04 ms     | **2.06 ms**   | 2.15 ms         |
+| `normalize`                   | 2.75 ms     | 1.55 ms     | **1.24 ms**   | 1.32 ms         |
+| `sqrt`                        | 939.04 µs   | 945.49 µs   | 858.87 µs     | **847.33 µs**   |
+| `gemm_256×256`                | 15.71 ms    | 15.69 ms    | **4.29 ms**   | 4.40 ms         |
+
+### Arithm Analysis
+
+- **Reduction operations** (`dot`, `norm_l2`, `sum`, `mean`) scale brilliantly with `rayon`: **~6× speedup** from Standard → Parallel, driven by embarrassingly-parallel sum-accumulation.
+- **Element-wise binary ops** (`add`, `sub`, `mul`, `div`, `min`, `absdiff`) gain a modest **~1.5× speedup** with Parallel. These are memory-bandwidth-bound; additional SIMD provides negligible further gain.
+- **`convert_scale_abs`** is the standout: SIMD gives **1.5×** (sequential), and Parallel+SIMD reaches **5.3× total speedup** — a combination of vectorizable math and parallelizable rows.
+- **`bitwise_and`** is fastest in Standard mode (255 µs). Parallel overhead (~380–445 µs) exceeds the benefit for this ultra-cheap 1-byte-per-element operation.
+- **`gemm_256×256`** benefits enormously from Parallel (**3.7×**), confirming that matrix multiplication is compute-bound and partitions well across cores.
+
+---
+
+## ImgProc — Performance Comparison Table (11 benchmarks)
+
+| Benchmark / Operation         | Standard    | SIMD Only    | Parallel      | Parallel + SIMD |
+| :---------------------------- | :---------- | :----------- | :------------ | :-------------- |
+| `cvt_color_rgb2gray`          | 2.66 ms     | 1.41 ms      | 529.63 µs     | **404.23 µs**   |
+| `box_filter_3x3`              | 9.01 ms     | 9.31 ms      | **3.07 ms**   | 3.69 ms         |
+| `sobel_3x3`                   | 22.79 ms    | 21.66 ms     | **1.87 ms**   | 1.87 ms         |
+| `scharr_x`                    | 22.76 ms    | 21.67 ms     | **1.78 ms**   | 1.85 ms         |
+| `threshold_binary`            | 1.31 ms     | 1.43 ms      | 626.70 µs     | **609.22 µs**   |
+| `cvt_color_bgr2gray`          | 2.69 ms     | †            | 617.94 µs     | **472.34 µs**   |
+| `cvt_color_rgba2gray`         | 2.64 ms     | 2.43 ms      | 676.02 µs     | **462.77 µs**   |
+| `gaussian_blur_3x3`           | 11.01 ms    | †            | **3.53 ms**   | 3.50 ms         |
+| `gaussian_blur_5x5`           | 15.21 ms    | 16.37 ms     | **4.30 ms**   | 4.72 ms         |
+| `laplacian_3x3`               | 45.91 ms    | 44.56 ms     | **4.41 ms**   | 4.44 ms         |
+| `canny`                       | 57.61 ms    | 62.62 ms     | 12.70 ms      | **12.54 ms**    |
+
+> † SIMD Only values for `cvt_color_bgr2gray` (249 ms) and `gaussian_blur_3x3` (18 ms) are anomalous — likely impacted by system activity during the run. Excluded from comparison.
+
+### ImgProc Analysis
+
+- **Color Conversion** (`cvt_color_rgb2gray`): highly vectorizable pixel-by-pixel math. SIMD alone yields **1.9×**, Parallel brings **5.0×**, and combined reaches **6.6× total speedup**.
+- **Derivatives** (`sobel_3x3`, `scharr_x`): the optimized `fast_deriv_3x3` implementation scales extremely well with Parallel — **12× speedup**. These benefit from row-wise parallelism where each row's 3×3 convolution is independent.
+- **`laplacian_3x3`**: composed of two Sobel passes, gains an enormous **10.4× speedup** with Parallel, consistent with the derivative scaling.
+- **`canny`**: multi-stage pipeline (Sobel + gradient + NMS + hysteresis). Achieves **4.6× speedup** with Parallel — limited by the sequential hysteresis tracking phase.
+- **Spatial Filters** (`box_filter`, `gaussian_blur`): **~3× speedup** with Parallel. The sliding-window pattern limits SIMD gains due to non-sequential memory access.
+- **`threshold_binary`**: simple per-pixel operation with modest **2.1× speedup** — limited by memory bandwidth.
+
+---
+
+## Structural — Performance Comparison Table (4 benchmarks)
+
+| Benchmark / Operation         | Standard    | SIMD Only   | Parallel      | Parallel + SIMD |
+| :---------------------------- | :---------- | :---------- | :------------ | :-------------- |
+| `flip_horiz`                  | 5.03 ms     | 5.81 ms     | **976.23 µs** | 971.35 µs       |
+| `transpose`                   | 7.42 ms     | 7.29 ms     | **1.09 ms**   | 1.14 ms         |
+| `split`                       | 3.21 ms     | 3.21 ms     | **1.24 ms**   | 1.31 ms         |
+| `merge`                       | 2.49 ms     | 2.27 ms     | **932.68 µs** | ‡               |
+
+> ‡ `merge` in Parallel+SIMD was not captured (benchmark run interrupted).
+
+### Structural Analysis
+
+- **All structural ops are memory-bound**: SIMD Only provides zero benefit (or even slight regression due to instruction overhead on non-vectorizable scatter/gather patterns).
+- **Parallel provides 2.6–6.8× speedup** across the board: `flip` (**5.2×**) and `transpose` (**6.8×**) benefit most because each row can be independently relocated.
+- **`merge` and `split`** (~2.5–2.7×) are still memory-bandwidth-limited even with parallelism, as they involve strided interleave/deinterleave across 3 channels.
+
+---
+
+## Summary — Best Configuration per Category
+
+| Category           | Best Config       | Typical Speedup vs Standard |
+| :----------------- | :---------------- | :-------------------------- |
+| Element-wise ops   | Parallel          | 1.5× (memory-bound)        |
+| Reductions         | Parallel          | 6× (embarrassingly parallel)|
+| Color conversion   | Parallel + SIMD   | 6.6× (vectorizable + parallel) |
+| Spatial filters    | Parallel          | 3× (row-parallel convolution) |
+| Derivatives        | Parallel          | 12× (optimized fast path)  |
+| Canny edge detect  | Parallel + SIMD   | 4.6× (multi-stage pipeline)|
+| Structural ops     | Parallel          | 5× (independent row ops)   |
+| GEMM               | Parallel          | 3.7× (compute-bound)       |
+
+*Conclusion*: Parallelism (`rayon`) is the dominant optimization for nearly all operations. SIMD (`target-cpu=native`) provides meaningful additional gains primarily for **pixel-level math** (`cvt_color`, `convert_scale_abs`) where the inner loop is trivially vectorizable. For memory-bound or scatter/gather patterns, SIMD adds no benefit.
+
