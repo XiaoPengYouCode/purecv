@@ -43,10 +43,104 @@ use std::ops::{BitAnd, BitOr, BitXor, Not, Sub};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+use crate::core::simd::SimdElement;
+
 /// Internal macro to handle feature-gated loop execution for binary operations.
-/// Handles Parallel auto-vectorized, and Sequential auto-vectorized loops.
+/// Handles 4 combinations: simd+parallel, simd-only, parallel-only, scalar-only.
+///
+/// # Usage
+///
+/// ```ignore
+/// // Without SIMD fast-path (scalar body only):
+/// binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 + s2);
+///
+/// // With SIMD fast-path:
+/// binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 + s2, simd: simd_add);
+/// ```
 macro_rules! binary_op {
+    // Variant WITH simd fast-path
+    ($dst:expr, $src1:expr, $src2:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s1:ident, $s2:ident| $body:expr, simd: $simd_fn:ident) => {
+        #[cfg(feature = "simd")]
+        {
+            // SIMD fast-path: only when dst type == src type and type has SIMD support
+            if std::any::TypeId::of::<$t_dst>() == std::any::TypeId::of::<$t_src>()
+                && <$t_src as SimdElement>::has_simd()
+            {
+                // Try the SIMD kernel. If it returns false, fall back to scalar.
+                let simd_done;
+
+                #[cfg(feature = "parallel")]
+                {
+                    use rayon::prelude::*;
+                    use std::sync::atomic::{AtomicBool, Ordering};
+
+                    let chunk_size = ($dst.data.len() / rayon::current_num_threads()).max(1024);
+                    let all_ok = AtomicBool::new(true);
+
+                    $dst.data
+                        .par_chunks_mut(chunk_size)
+                        .enumerate()
+                        .for_each(|(idx, dst_chunk)| {
+                            let offset = idx * chunk_size;
+                            let len = dst_chunk.len();
+                            // Transmute the dst chunk to $t_src for the SIMD call
+                            // This is safe because we verified $t_dst == $t_src above
+                            let dst_as_src: &mut [$t_src] = unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    dst_chunk.as_mut_ptr() as *mut $t_src,
+                                    len,
+                                )
+                            };
+                            let ok = <$t_src>::$simd_fn(
+                                dst_as_src,
+                                &$src1.data[offset..offset + len],
+                                &$src2.data[offset..offset + len],
+                            );
+                            if !ok {
+                                all_ok.store(false, Ordering::Relaxed);
+                            }
+                        });
+
+                    simd_done = all_ok.load(Ordering::Relaxed);
+                }
+                #[cfg(not(feature = "parallel"))]
+                {
+                    let dst_as_src: &mut [$t_src] = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            $dst.data.as_mut_ptr() as *mut $t_src,
+                            $dst.data.len(),
+                        )
+                    };
+                    simd_done = <$t_src>::$simd_fn(
+                        dst_as_src,
+                        &$src1.data,
+                        &$src2.data,
+                    );
+                }
+
+                if !simd_done {
+                    // SIMD kernel declined — fall back to scalar loop
+                    binary_op!(@scalar $dst, $src1, $src2, $t_dst, $t_src, |$d, $s1, $s2| $body);
+                }
+            } else {
+                // Fallback to scalar loop when types differ or no SIMD support
+                binary_op!(@scalar $dst, $src1, $src2, $t_dst, $t_src, |$d, $s1, $s2| $body);
+            }
+        }
+
+        #[cfg(not(feature = "simd"))]
+        {
+            binary_op!(@scalar $dst, $src1, $src2, $t_dst, $t_src, |$d, $s1, $s2| $body);
+        }
+    };
+
+    // Variant WITHOUT simd fast-path (original behavior)
     ($dst:expr, $src1:expr, $src2:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s1:ident, $s2:ident| $body:expr) => {
+        binary_op!(@scalar $dst, $src1, $src2, $t_dst, $t_src, |$d, $s1, $s2| $body);
+    };
+
+    // Internal: scalar-only dispatch (parallel or sequential)
+    (@scalar $dst:expr, $src1:expr, $src2:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s1:ident, $s2:ident| $body:expr) => {
         #[cfg(feature = "parallel")]
         {
             $dst.data
@@ -116,7 +210,83 @@ macro_rules! binary_op_scalar {
 }
 
 macro_rules! unary_op {
+    // Variant WITH simd fast-path
+    ($dst:expr, $src:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident| $body:expr, simd: $simd_fn:ident) => {
+        #[cfg(feature = "simd")]
+        {
+            if std::any::TypeId::of::<$t_dst>() == std::any::TypeId::of::<$t_src>()
+                && <$t_src as SimdElement>::has_simd()
+            {
+                // Try the SIMD kernel. If it returns false, fall back to scalar.
+                let simd_done;
+
+                #[cfg(feature = "parallel")]
+                {
+                    use rayon::prelude::*;
+                    use std::sync::atomic::{AtomicBool, Ordering};
+
+                    let chunk_size = ($dst.data.len() / rayon::current_num_threads()).max(1024);
+                    let all_ok = AtomicBool::new(true);
+
+                    $dst.data
+                        .par_chunks_mut(chunk_size)
+                        .enumerate()
+                        .for_each(|(idx, dst_chunk)| {
+                            let offset = idx * chunk_size;
+                            let len = dst_chunk.len();
+                            let dst_as_src: &mut [$t_src] = unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    dst_chunk.as_mut_ptr() as *mut $t_src,
+                                    len,
+                                )
+                            };
+                            let ok = <$t_src>::$simd_fn(
+                                dst_as_src,
+                                &$src.data[offset..offset + len],
+                            );
+                            if !ok {
+                                all_ok.store(false, Ordering::Relaxed);
+                            }
+                        });
+
+                    simd_done = all_ok.load(Ordering::Relaxed);
+                }
+                #[cfg(not(feature = "parallel"))]
+                {
+                    let dst_as_src: &mut [$t_src] = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            $dst.data.as_mut_ptr() as *mut $t_src,
+                            $dst.data.len(),
+                        )
+                    };
+                    simd_done = <$t_src>::$simd_fn(
+                        dst_as_src,
+                        &$src.data,
+                    );
+                }
+
+                if !simd_done {
+                    // SIMD kernel declined — fall back to scalar loop
+                    unary_op!(@scalar $dst, $src, $t_dst, $t_src, |$d, $s| $body);
+                }
+            } else {
+                unary_op!(@scalar $dst, $src, $t_dst, $t_src, |$d, $s| $body);
+            }
+        }
+
+        #[cfg(not(feature = "simd"))]
+        {
+            unary_op!(@scalar $dst, $src, $t_dst, $t_src, |$d, $s| $body);
+        }
+    };
+
+    // Variant WITHOUT simd fast-path (original behavior)
     ($dst:expr, $src:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident| $body:expr) => {
+        unary_op!(@scalar $dst, $src, $t_dst, $t_src, |$d, $s| $body);
+    };
+
+    // Internal: scalar-only dispatch
+    (@scalar $dst:expr, $src:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident| $body:expr) => {
         #[cfg(feature = "parallel")]
         {
             $dst.data
@@ -218,7 +388,7 @@ where
 /// dst = src1 + src2
 pub fn add<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -228,7 +398,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 + s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 + s2, simd: simd_add);
 
     Ok(dst)
 }
@@ -238,7 +408,7 @@ where
 /// dst = src1 - src2
 pub fn subtract<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -248,7 +418,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 - s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 - s2, simd: simd_sub);
 
     Ok(dst)
 }
@@ -258,7 +428,7 @@ where
 /// dst = src1 * src2
 pub fn multiply<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -268,7 +438,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 * s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 * s2, simd: simd_mul);
 
     Ok(dst)
 }
@@ -278,7 +448,7 @@ where
 /// dst = src1 / src2
 pub fn divide<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -294,7 +464,7 @@ where
         } else {
             *d = T::zero();
         }
-    });
+    }, simd: simd_div);
 
     Ok(dst)
 }
@@ -406,7 +576,7 @@ where
 /// Calculates the per-element minimum of two matrices.
 pub fn min<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Default + SimdElement + 'static,
 {
     if !src1.dims_match(src2) {
         return Err(PureCvError::InvalidDimensions(
@@ -418,7 +588,7 @@ where
 
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
         *d = if s1 < s2 { s1 } else { s2 };
-    });
+    }, simd: simd_min);
 
     Ok(dst)
 }
@@ -426,7 +596,7 @@ where
 /// Calculates the per-element maximum of two matrices.
 pub fn max<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Default + SimdElement + 'static,
 {
     if !src1.dims_match(src2) {
         return Err(PureCvError::InvalidDimensions(
@@ -438,7 +608,7 @@ where
 
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
         *d = if s1 > s2 { s1 } else { s2 };
-    });
+    }, simd: simd_max);
 
     Ok(dst)
 }
@@ -1277,6 +1447,7 @@ where
         + ToPrimitive
         + FromPrimitive
         + Default
+        + SimdElement
         + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
@@ -1287,6 +1458,18 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
+    #[cfg(feature = "simd")]
+    {
+        // Only f32/f64 have simd_add_weighted; u8 and others use the scalar fallback.
+        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+            && <T as SimdElement>::has_simd()
+        {
+            <T>::simd_add_weighted(&mut dst.data, &src1.data, &src2.data, alpha, beta, gamma);
+            return Ok(dst);
+        }
+    }
+
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
         let val = s1.to_f64().unwrap_or(0.0) * alpha + s2.to_f64().unwrap_or(0.0) * beta + gamma;
         *d = T::from_f64(val).unwrap_or(T::zero());
@@ -1294,8 +1477,6 @@ where
 
     Ok(dst)
 }
-
-/// Calculates the square root of every matrix element.
 ///
 /// dst = sqrt(src)
 pub fn sqrt<T>(src: &Matrix<T>) -> Result<Matrix<T>>
@@ -1309,6 +1490,7 @@ where
         + ToPrimitive
         + FromPrimitive
         + Default
+        + SimdElement
         + 'static,
 {
     let mut dst = Matrix::<T>::new(src.rows, src.cols, src.channels);
@@ -1316,12 +1498,10 @@ where
     unary_op!(dst, src, T, T, |d, s| {
         let val = s.to_f64().unwrap_or(0.0).sqrt();
         *d = T::from_f64(val).unwrap_or(T::zero());
-    });
+    }, simd: simd_sqrt);
 
     Ok(dst)
 }
-
-/// Calculates the exponent of every matrix element.
 ///
 /// dst = exp(src)
 pub fn exp<T>(src: &Matrix<T>) -> Result<Matrix<T>>
@@ -1404,9 +1584,21 @@ where
 /// dst(I) = saturate_cast<u8>(|src(I)*alpha + beta|)
 pub fn convert_scale_abs<T>(src: &Matrix<T>, alpha: f64, beta: f64) -> Result<Matrix<u8>>
 where
-    T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
+    T: Num + Copy + Send + Sync + ToPrimitive + Default + SimdElement + 'static,
 {
     let mut dst = Matrix::<u8>::new(src.rows, src.cols, src.channels);
+
+    #[cfg(feature = "simd")]
+    {
+        // Only f32/f64 have simd_convert_scale_abs; others use the scalar fallback.
+        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+            && <T as SimdElement>::has_simd()
+        {
+            <T>::simd_convert_scale_abs(&mut dst.data, &src.data, alpha, beta);
+            return Ok(dst);
+        }
+    }
 
     unary_op!(dst, src, u8, T, |d, s| {
         let val = (s.to_f64().unwrap_or(0.0) * alpha + beta).abs();
@@ -1632,12 +1824,25 @@ where
 /// ```
 pub fn dot<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<f64>
 where
-    T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
+    T: Num + Copy + Send + Sync + ToPrimitive + Default + SimdElement + 'static,
 {
     if src1.data.len() != src2.data.len() {
         return Err(PureCvError::InvalidDimensions(
             "Matrices must have the same number of elements".to_string(),
         ));
+    }
+
+    #[cfg(feature = "simd")]
+    {
+        // Only f32/f64 have simd_dot; others use the scalar fallback.
+        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+            && <T as SimdElement>::has_simd()
+        {
+            if let Some(result) = <T>::simd_dot(&src1.data, &src2.data) {
+                return Ok(result);
+            }
+        }
     }
 
     #[cfg(feature = "parallel")]
@@ -2052,7 +2257,15 @@ where
 /// @sa cartToPolar, polarToCart, phase, sqrt
 pub fn magnitude<T>(x: &Matrix<T>, y: &Matrix<T>, dst: &mut Matrix<T>) -> Result<()>
 where
-    T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
+    T: DataType
+        + ToPrimitive
+        + FromPrimitive
+        + Default
+        + Copy
+        + Send
+        + Sync
+        + SimdElement
+        + 'static,
 {
     if !x.dims_match(y) {
         return Err(PureCvError::InvalidDimensions(
@@ -2061,6 +2274,18 @@ where
     }
 
     dst.create(x.rows, x.cols, x.channels);
+
+    #[cfg(feature = "simd")]
+    {
+        // Only f32/f64 have simd_magnitude; others use the scalar fallback.
+        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+            && <T as SimdElement>::has_simd()
+        {
+            <T>::simd_magnitude(&mut dst.data, &x.data, &y.data);
+            return Ok(());
+        }
+    }
 
     #[cfg(feature = "parallel")]
     {
