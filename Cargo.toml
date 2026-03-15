@@ -1,6 +1,6 @@
 [package]
 name = "purecv"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Walter Perdan <https://github.com/kalwalt>"]
 edition = "2021"
 description = "A pure Rust, high-performance computer vision library focused on safety and portability."

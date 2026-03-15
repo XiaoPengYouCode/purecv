@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-03-15
+
+### 🐛 Bug Fixes
+
+- *(core)* Resolve arithm.rs compilation errors and add magnitude/polar functions
+
+### 📚 Documentation
+
+- Add Copilot instructions and project guidelines
+- Fix 3-D to 3D in ndarray method doc comments
+- Update README with ndarray feature flag and usage examples
+- Fix ndarray example to avoid use-after-move
+- *(core)* Add documentation and examples to linear algebra functions
+- Update contribution guidelines for pre-commit checks and code quality in agents files
+- Update README to enhance feature descriptions and clarify dependencies
+- Add AGENTS.md for AI coding agents
+- Update README to include new functions in linear algebra, sorting, clustering, transforms, and utilities
+
+### 🚀 Features
+
+- Add ndarray interoperability for Matrix via optional feature flag
+- *(core)* Implement gemm, trace, dot, cross, check_range, and set_identity
+- *(core)* Add randu, randn, and set_rng_seed
+- *(arithm)* Add matrix transformation and perspective transformation functions
+- *(core)* Add solve_poly, sort, sort_idx, and kmeans functions
+
+### 🚜 Refactor
+
+- *(core)* Fix formatting violations from cargo fmt
+- Fix formatting in core arithm
+- Fix clippy needless_range_loop warnings in core arithm
+- Apply cargo fmt to fix CI formatting check
+
 ## [0.1.1] - 2026-03-14
 
 ### ⚙️ Miscellaneous Tasks
