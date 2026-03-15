@@ -61,7 +61,8 @@
 /// Default methods are all no-ops that return immediately.  Concrete
 /// implementations for `f32`, `f64`, and `u8` override these methods
 /// when the `simd` feature is enabled.
-pub(crate) trait SimdElement: Copy + Send + Sync + 'static {
+#[allow(dead_code)]
+pub trait SimdElement: Copy + Send + Sync + 'static {
     /// Returns `true` if this type has SIMD kernel implementations
     /// *and* the `simd` feature is enabled at compile time.
     fn has_simd() -> bool {

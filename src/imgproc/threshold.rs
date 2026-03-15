@@ -38,8 +38,6 @@ use crate::core::error::{PureCvError, Result};
 use crate::core::Matrix;
 use num_traits::{FromPrimitive, NumCast, ToPrimitive};
 
-#[cfg(not(feature = "parallel"))]
-use crate::core::utils::ParIterFallback;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
