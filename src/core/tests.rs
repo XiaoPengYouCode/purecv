@@ -279,55 +279,55 @@ mod tests {
 
     #[test]
     fn test_norm_normalize() {
-        use crate::core::norm::*;
         let m = Matrix::from_vec(1, 3, 1, vec![1.0f64, 2.0, 3.0]);
 
         // Norms
-        assert_eq!(norm(&m, NormTypes::INF), 3.0);
-        assert_eq!(norm(&m, NormTypes::L1), 6.0);
-        assert_eq!(norm(&m, NormTypes::L2), (1.0f64 + 4.0 + 9.0).sqrt());
+        assert_eq!(norm(&m, NormTypes::Inf, None).unwrap(), 3.0);
+        assert_eq!(norm(&m, NormTypes::L1, None).unwrap(), 6.0);
+        assert_eq!(norm(&m, NormTypes::L2, None).unwrap(), (1.0f64 + 4.0 + 9.0).sqrt());
 
         // Normalize MINMAX to [0, 1]
-        let m_minmax = normalize(&m, 0.0, 1.0, NormTypes::MINMAX).unwrap();
+        let mut m_minmax = Matrix::<f64>::new(1, 3, 1);
+        normalize(&m, &mut m_minmax, 0.0, 1.0, NormTypes::MinMax, -1, None).unwrap();
         assert_eq!(m_minmax.data[0], 0.0);
         assert_eq!(m_minmax.data[2], 1.0);
         assert!((m_minmax.data[1] - 0.5).abs() < 1e-6);
 
         // Normalize L2 to norm 1
-        let m_l2 = normalize(&m, 1.0, 0.0, NormTypes::L2).unwrap();
-        let n_l2 = norm(&m_l2, NormTypes::L2);
+        let mut m_l2 = Matrix::<f64>::new(1, 3, 1);
+        normalize(&m, &mut m_l2, 1.0, 0.0, NormTypes::L2, -1, None).unwrap();
+        let n_l2 = norm(&m_l2, NormTypes::L2, None).unwrap();
         assert!((n_l2 - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_stats() {
-        use crate::core::stats::*;
         let m = Matrix::from_vec(2, 2, 1, vec![10.0f64, 20.0, 30.0, 40.0]);
 
         // Sum
         let s = sum(&m);
-        assert_eq!(s[0], 100.0);
+        assert_eq!(s.v[0], 100.0);
 
         // Mean
         let mn = mean(&m);
-        assert_eq!(mn[0], 25.0);
+        assert_eq!(mn.v[0], 25.0);
 
         // MinMaxLoc
-        let (min_vals, max_vals, min_locs, max_locs) = min_max_loc(&m);
-        assert_eq!(min_vals[0], 10.0);
-        assert_eq!(max_vals[0], 40.0);
-        assert_eq!(min_locs[0].x, 0);
-        assert_eq!(min_locs[0].y, 0);
-        assert_eq!(max_locs[0].x, 1);
-        assert_eq!(max_locs[0].y, 1);
+        let (min_val, max_val, min_loc, max_loc) = min_max_loc(&m);
+        assert_eq!(min_val, 10.0);
+        assert_eq!(max_val, 40.0);
+        assert_eq!(min_loc.0, 0);
+        assert_eq!(min_loc.1, 0);
+        assert_eq!(max_loc.0, 1);
+        assert_eq!(max_loc.1, 1);
 
         // MeanStdDev
         let (mn2, sd) = mean_std_dev(&m);
-        assert_eq!(mn2[0], 25.0);
+        assert_eq!(mn2.v[0], 25.0);
         // Variance = ((10-25)^2 + (20-25)^2 + (30-25)^2 + (40-25)^2) / 4
         // Variance = (225 + 25 + 25 + 225) / 4 = 500 / 4 = 125
         // StdDev = sqrt(125)
-        assert!((sd[0] - 125.0f64.sqrt()).abs() < 1e-6);
+        assert!((sd.v[0] - 125.0f64.sqrt()).abs() < 1e-6);
     }
 
     #[test]

@@ -238,12 +238,48 @@ impl RotatedRect {
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BorderTypes {
-    CONSTANT = 0,
-    REPLICATE = 1,
-    REFLECT = 2,
-    WRAP = 3,
+    Constant = 0,
+    Replicate = 1,
+    Reflect = 2,
+    Wrap = 3,
     #[default]
-    REFLECT_101 = 4,
-    TRANSPARENT = 5,
-    ISOLATED = 16,
+    Reflect101 = 4,
+    Transparent = 5,
+    Isolated = 16,
+}
+
+/// Comparison types for `compare` and `compare_scalar`.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpTypes {
+    Eq = 0,
+    Gt = 1,
+    Ge = 2,
+    Lt = 3,
+    Le = 4,
+    Ne = 5,
+}
+
+/// Normalization types for `norm` and `normalize`.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormTypes {
+    Inf = 1,
+    L1 = 2,
+    L2 = 4,
+    L2Sqr = 5,
+    Hamming = 6,
+    Hamming2 = 7,
+    Relative = 8,
+    MinMax = 32,
+}
+
+/// Reduction types for `reduce`.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceTypes {
+    Sum = 0,
+    Avg = 1,
+    Max = 2,
+    Min = 3,
 }

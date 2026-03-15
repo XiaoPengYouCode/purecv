@@ -657,3 +657,75 @@ where
 
     Ok(dst)
 }
+
+/// Extracts a single channel from a multi-channel matrix.
+pub fn extract_channel<T>(src: &Matrix<T>, coi: usize) -> Result<Matrix<T>>
+where
+    T: Copy + Send + Sync + Default + 'static,
+{
+    if coi >= src.channels {
+        return Err(PureCvError::InvalidInput(format!(
+            "Channel index {} is out of range (total channels: {})",
+            coi, src.channels
+        )));
+    }
+
+    let mut dst = Matrix::<T>::new(src.rows, src.cols, 1);
+    let channels = src.channels;
+
+    #[cfg(feature = "parallel")]
+    {
+        dst.data.par_iter_mut().enumerate().for_each(|(i, val)| {
+            *val = src.data[i * channels + coi];
+        });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for i in 0..src.rows * src.cols {
+            dst.data[i] = src.data[i * channels + coi];
+        }
+    }
+
+    Ok(dst)
+}
+
+/// Inserts a single channel into a multi-channel matrix.
+pub fn insert_channel<T>(src: &Matrix<T>, dst: &mut Matrix<T>, coi: usize) -> Result<()>
+where
+    T: Copy + Send + Sync + Default + 'static,
+{
+    if coi >= dst.channels {
+        return Err(PureCvError::InvalidInput(format!(
+            "Channel index {} is out of range (destination channels: {})",
+            coi, dst.channels
+        )));
+    }
+
+    if src.rows != dst.rows || src.cols != dst.cols || src.channels != 1 {
+        return Err(PureCvError::InvalidDimensions(
+            "Source must be single-channel and match destination size".to_string(),
+        ));
+    }
+
+    let channels = dst.channels;
+
+    #[cfg(feature = "parallel")]
+    {
+        dst.data
+            .par_chunks_exact_mut(channels)
+            .enumerate()
+            .for_each(|(i, pixel_dst)| {
+                pixel_dst[coi] = src.data[i];
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for i in 0..src.rows * src.cols {
+            dst.data[i * channels + coi] = src.data[i];
+        }
+    }
+
+    Ok(())
+}

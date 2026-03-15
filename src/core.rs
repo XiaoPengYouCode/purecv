@@ -37,8 +37,6 @@
 pub mod arithm;
 pub mod error;
 pub mod matrix;
-pub mod norm;
-pub mod stats;
 pub mod structural;
 pub mod types;
 pub mod utils;
@@ -48,8 +46,10 @@ mod tests;
 
 // Re-exports for easier access
 pub use self::arithm::{
-    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, check_range, cross, determinant, dot, gemm,
-    invert, set_identity, solve, trace, DecompTypes, GEMM_1_T, GEMM_2_T, GEMM_3_T,
+    absdiff, bitwise_and, bitwise_not, bitwise_or, bitwise_xor, cart_to_polar, check_range,
+    count_non_zero, cross, determinant, dot, gemm, invert, magnitude, mean, mean_std_dev,
+    min_max_loc, norm, normalize, phase, polar_to_cart, reduce, set_identity, solve, sum, trace,
+    DecompTypes, GEMM_1_T, GEMM_2_T, GEMM_3_T,
 };
 pub use self::error::{PureCvError, Result};
 pub use self::matrix::{
@@ -58,13 +58,11 @@ pub use self::matrix::{
     CV_32SC1, CV_32SC2, CV_32SC3, CV_32SC4, CV_64F, CV_64FC1, CV_64FC2, CV_64FC3, CV_64FC4, CV_8S,
     CV_8SC1, CV_8SC2, CV_8SC3, CV_8SC4, CV_8U, CV_8UC1, CV_8UC2, CV_8UC3, CV_8UC4,
 };
-pub use self::norm::{norm, normalize, NormTypes};
-pub use self::stats::{mean, mean_std_dev, min_max_loc, sum};
 pub use self::types::{
-    BorderTypes, Point, Point2d, Point2f, Point2i, Point2l, Point3, Point3d, Point3f, Point3i,
-    Rect, Rect2d, Rect2f, Rect2i, RotatedRect, Scalar, Size, Size2d, Size2f, Size2i, TermCriteria,
-    TermType,
+    BorderTypes, NormTypes, Point, Point2d, Point2f, Point2i, Point2l, Point3, Point3d, Point3f,
+    Point3i, Rect, Rect2d, Rect2f, Rect2i, ReduceTypes, RotatedRect, Scalar, Size, Size2d, Size2f,
+    Size2i, TermCriteria, TermType,
 };
-pub use self::utils::border_interpolate;
+pub use self::utils::{border_interpolate, get_tick_count, get_tick_frequency};
 #[cfg(not(feature = "parallel"))]
 pub use self::utils::ParIterFallback;
