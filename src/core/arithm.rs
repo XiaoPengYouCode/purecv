@@ -719,7 +719,7 @@ where
     {
         let sums = src
             .data
-            .par_chunks_exact(src.channels as usize)
+            .par_chunks_exact(src.channels)
             .fold(
                 || [0.0f64; 4],
                 |mut acc, pixel| {
@@ -782,7 +782,7 @@ where
     let mut sq_sum = [0.0f64; 4];
     let total_pixels = (src.rows * src.cols) as f64;
 
-    for pixel in src.data.chunks_exact(src.channels as usize) {
+    for pixel in src.data.chunks_exact(src.channels) {
         for (i, &val) in pixel.iter().enumerate() {
             if i < 4 {
                 let v = val.to_f64().unwrap_or(0.0) - m.v[i];
@@ -1234,8 +1234,8 @@ pub fn min_max_loc<T>(src: &Matrix<T>) -> (f64, f64, (i32, i32), (i32, i32))
 where
     T: Num + ToPrimitive + Copy + PartialOrd + Default + 'static,
 {
-    let mut min_val = std::f64::MAX;
-    let mut max_val = std::f64::MIN;
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
     let mut min_loc = (0, 0);
     let mut max_loc = (0, 0);
 
