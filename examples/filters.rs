@@ -77,13 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Gaussian Blur
     println!("Applying Gaussian Blur...");
-    let g_blurred = gaussian_blur(
-        &mat_rgb,
-        Size::new(5, 5),
-        1.5,
-        1.5,
-        BorderTypes::Reflect101,
-    )?;
+    let g_blurred = gaussian_blur(&mat_rgb, Size::new(5, 5), 1.5, 1.5, BorderTypes::Reflect101)?;
     save_matrix_rgb(&g_blurred, "examples/data/out/output_gaussian_blur.png")?;
 
     // Median Blur
@@ -101,14 +95,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sob_x = sobel(&mat_gray, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
     // Normalize for visualization
     let mut sob_x_norm = Matrix::<u8>::new(sob_x.rows, sob_x.cols, sob_x.channels);
-    normalize(&sob_x, &mut sob_x_norm, 0.0, 255.0, NormTypes::MinMax, -1, None)?;
+    normalize(
+        &sob_x,
+        &mut sob_x_norm,
+        0.0,
+        255.0,
+        NormTypes::MinMax,
+        -1,
+        None,
+    )?;
     save_matrix_gray(&sob_x_norm, "examples/data/out/output_sobel_x.png")?;
 
     // Scharr (on grayscale)
     println!("Applying Scharr...");
     let sch_y = scharr(&mat_gray, 0, 1, 1.0, 0.0, BorderTypes::Reflect101)?;
     let mut sch_y_norm = Matrix::<u8>::new(sch_y.rows, sch_y.cols, sch_y.channels);
-    normalize(&sch_y, &mut sch_y_norm, 0.0, 255.0, NormTypes::MinMax, -1, None)?;
+    normalize(
+        &sch_y,
+        &mut sch_y_norm,
+        0.0,
+        255.0,
+        NormTypes::MinMax,
+        -1,
+        None,
+    )?;
     save_matrix_gray(&sch_y_norm, "examples/data/out/output_scharr_y.png")?;
 
     // Laplacian (on grayscale)

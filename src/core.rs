@@ -63,6 +63,6 @@ pub use self::types::{
     Point3i, Rect, Rect2d, Rect2f, Rect2i, ReduceTypes, RotatedRect, Scalar, Size, Size2d, Size2f,
     Size2i, TermCriteria, TermType,
 };
-pub use self::utils::{border_interpolate, get_tick_count, get_tick_frequency};
 #[cfg(not(feature = "parallel"))]
 pub use self::utils::ParIterFallback;
+pub use self::utils::{border_interpolate, get_tick_count, get_tick_frequency};

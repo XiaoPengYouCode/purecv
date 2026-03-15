@@ -35,9 +35,9 @@
  */
 
 use crate::core::error::{PureCvError, Result};
-use crate::core::types::{Scalar, NormTypes, ReduceTypes, CmpTypes};
-use crate::core::{Matrix, DataType};
-use num_traits::{Bounded, FromPrimitive, Num, ToPrimitive, SaturatingAdd, SaturatingSub};
+use crate::core::types::{CmpTypes, NormTypes, ReduceTypes, Scalar};
+use crate::core::{DataType, Matrix};
+use num_traits::{Bounded, FromPrimitive, Num, SaturatingAdd, SaturatingSub, ToPrimitive};
 use std::ops::{BitAnd, BitOr, BitXor, Not, Sub};
 
 #[cfg(feature = "parallel")]
@@ -82,7 +82,7 @@ macro_rules! binary_op_scalar {
     ($dst:expr, $src:expr, $scalar:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident, $sc:ident| $body:expr) => {
         let channels = $src.channels as usize;
         let scalar_data = $scalar.v;
-        
+
         #[cfg(feature = "parallel")]
         {
             $dst.data
@@ -146,7 +146,15 @@ macro_rules! unary_op {
 /// Adds a scalar value to a matrix: dst = src1 + scalar
 pub fn add_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
 where
-    T: DataType + SaturatingAdd + FromPrimitive + ToPrimitive + Send + Sync + 'static + Default + Copy,
+    T: DataType
+        + SaturatingAdd
+        + FromPrimitive
+        + ToPrimitive
+        + Send
+        + Sync
+        + 'static
+        + Default
+        + Copy,
 {
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
     binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
@@ -158,7 +166,15 @@ where
 /// Subtracts a scalar value from a matrix: dst = src1 - scalar
 pub fn subtract_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
 where
-    T: DataType + SaturatingSub + FromPrimitive + ToPrimitive + Send + Sync + 'static + Default + Copy,
+    T: DataType
+        + SaturatingSub
+        + FromPrimitive
+        + ToPrimitive
+        + Send
+        + Sync
+        + 'static
+        + Default
+        + Copy,
 {
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
     binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
@@ -236,7 +252,6 @@ where
 
     Ok(dst)
 }
-
 
 /// Calculates the per-element product of two matrices.
 ///
@@ -553,9 +568,16 @@ pub fn in_range<T>(
 where
     T: DataType + PartialOrd + Default + Copy + Sync + Send,
 {
-    if src.rows != lowerb.rows || src.cols != lowerb.cols || src.channels != lowerb.channels ||
-       src.rows != upperb.rows || src.cols != upperb.cols || src.channels != upperb.channels {
-        return Err(PureCvError::InvalidInput("Size or channels mismatch".into()));
+    if src.rows != lowerb.rows
+        || src.cols != lowerb.cols
+        || src.channels != lowerb.channels
+        || src.rows != upperb.rows
+        || src.cols != upperb.cols
+        || src.channels != upperb.channels
+    {
+        return Err(PureCvError::InvalidInput(
+            "Size or channels mismatch".into(),
+        ));
     }
 
     dst.create(src.rows, src.cols, 1);
@@ -791,12 +813,16 @@ where
             #[cfg(feature = "parallel")]
             {
                 if let Some(m) = mask {
-                    Ok(src.data.par_iter().zip(m.data.par_iter())
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .zip(m.data.par_iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
                         .reduce(|| 0.0, f64::max))
                 } else {
-                    Ok(src.data
+                    Ok(src
+                        .data
                         .par_iter()
                         .map(|&x| x.to_f64().unwrap_or(0.0).abs())
                         .reduce(|| 0.0, f64::max))
@@ -805,12 +831,16 @@ where
             #[cfg(not(feature = "parallel"))]
             {
                 if let Some(m) = mask {
-                    Ok(src.data.iter().zip(m.data.iter())
+                    Ok(src
+                        .data
+                        .iter()
+                        .zip(m.data.iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
                         .fold(0.0, f64::max))
                 } else {
-                    Ok(src.data
+                    Ok(src
+                        .data
                         .iter()
                         .map(|&x| x.to_f64().unwrap_or(0.0).abs())
                         .fold(0.0, f64::max))
@@ -821,12 +851,16 @@ where
             #[cfg(feature = "parallel")]
             {
                 if let Some(m) = mask {
-                    Ok(src.data.par_iter().zip(m.data.par_iter())
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .zip(m.data.par_iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
                         .sum::<f64>())
                 } else {
-                    Ok(src.data
+                    Ok(src
+                        .data
                         .par_iter()
                         .map(|&x| x.to_f64().unwrap_or(0.0).abs())
                         .sum::<f64>())
@@ -835,12 +869,16 @@ where
             #[cfg(not(feature = "parallel"))]
             {
                 if let Some(m) = mask {
-                    Ok(src.data.iter().zip(m.data.iter())
+                    Ok(src
+                        .data
+                        .iter()
+                        .zip(m.data.iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
                         .sum::<f64>())
                 } else {
-                    Ok(src.data
+                    Ok(src
+                        .data
                         .iter()
                         .map(|&x| x.to_f64().unwrap_or(0.0).abs())
                         .sum::<f64>())
@@ -851,7 +889,9 @@ where
             #[cfg(feature = "parallel")]
             {
                 let sq_sum = if let Some(m) = mask {
-                    src.data.par_iter().zip(m.data.par_iter())
+                    src.data
+                        .par_iter()
+                        .zip(m.data.par_iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| {
                             let val = x.to_f64().unwrap_or(0.0);
@@ -872,7 +912,9 @@ where
             #[cfg(not(feature = "parallel"))]
             {
                 let sq_sum = if let Some(m) = mask {
-                    src.data.iter().zip(m.data.iter())
+                    src.data
+                        .iter()
+                        .zip(m.data.iter())
                         .filter(|(_, &mask_val)| mask_val != 0)
                         .map(|(&x, _)| {
                             let val = x.to_f64().unwrap_or(0.0);
@@ -916,7 +958,7 @@ where
 {
     // If dtype is negative, we keep source type. Currently we don't support converting here yet,
     // so we just ignore it if it equals T's depth.
-    
+
     match norm_type {
         NormTypes::MinMax => {
             let mut min_val = f64::MAX;
@@ -926,15 +968,23 @@ where
                 for (&val, &mask_val) in src.data.iter().zip(m.data.iter()) {
                     if mask_val != 0 {
                         let v = val.to_f64().unwrap_or(0.0);
-                        if v < min_val { min_val = v; }
-                        if v > max_val { max_val = v; }
+                        if v < min_val {
+                            min_val = v;
+                        }
+                        if v > max_val {
+                            max_val = v;
+                        }
                     }
                 }
             } else {
                 for &val in src.data.iter() {
                     let v = val.to_f64().unwrap_or(0.0);
-                    if v < min_val { min_val = v; }
-                    if v > max_val { max_val = v; }
+                    if v < min_val {
+                        min_val = v;
+                    }
+                    if v > max_val {
+                        max_val = v;
+                    }
                 }
             }
 
@@ -947,7 +997,10 @@ where
             #[cfg(feature = "parallel")]
             {
                 if let Some(m) = mask {
-                    dst.data.par_iter_mut().zip(src.data.par_iter()).zip(m.data.par_iter())
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .zip(m.data.par_iter())
                         .for_each(|((d, &s), &mask_val)| {
                             if mask_val != 0 {
                                 let v = s.to_f64().unwrap_or(0.0);
@@ -992,13 +1045,16 @@ where
             #[cfg(feature = "parallel")]
             {
                 if let Some(m) = mask {
-                    dst.data.par_iter_mut().zip(src.data.par_iter()).zip(m.data.par_iter())
-                    .for_each(|((d, &s), &mask_val)| {
-                        if mask_val != 0 {
-                            let res = s.to_f64().unwrap_or(0.0) * scale;
-                            *d = T::from_f64(res).unwrap_or(T::default());
-                        }
-                    });
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .zip(m.data.par_iter())
+                        .for_each(|((d, &s), &mask_val)| {
+                            if mask_val != 0 {
+                                let res = s.to_f64().unwrap_or(0.0) * scale;
+                                *d = T::from_f64(res).unwrap_or(T::default());
+                            }
+                        });
                 } else {
                     dst.data
                         .par_iter_mut()
@@ -1041,7 +1097,16 @@ where
 /// dim 1: reduced to 1 column.
 pub fn reduce<T>(src: &Matrix<T>, dim: i32, reduce_op: ReduceTypes) -> Result<Matrix<T>>
 where
-    T: DataType + Num + ToPrimitive + FromPrimitive + Copy + Send + Sync + PartialOrd + Default + 'static,
+    T: DataType
+        + Num
+        + ToPrimitive
+        + FromPrimitive
+        + Copy
+        + Send
+        + Sync
+        + PartialOrd
+        + Default
+        + 'static,
 {
     let (rows, cols) = if dim == 0 {
         (1, src.cols)
@@ -1333,7 +1398,6 @@ where
 
     Ok(dst)
 }
-
 
 /// Scales, calculates absolute values, and converts the result to 8-bit.
 ///
@@ -1986,11 +2050,7 @@ where
 /// `dst(I) = sqrt(x(I)^2 + y(I)^2)`
 ///
 /// @sa cartToPolar, polarToCart, phase, sqrt
-pub fn magnitude<T>(
-    x: &Matrix<T>,
-    y: &Matrix<T>,
-    dst: &mut Matrix<T>,
-) -> Result<()>
+pub fn magnitude<T>(x: &Matrix<T>, y: &Matrix<T>, dst: &mut Matrix<T>) -> Result<()>
 where
     T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
 {
@@ -2249,7 +2309,6 @@ where
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2403,9 +2462,9 @@ mod tests {
     #[test]
     fn test_in_range() {
         let mut src = Matrix::<u8>::new(1, 3, 3); // 1x3 3-channel
-        // Pixel 0: (10, 20, 30) - In range
-        // Pixel 1: (5, 20, 30)  - Out of range (ch 0 low)
-        // Pixel 2: (100, 100, 100) - Out of range (high)
+                                                  // Pixel 0: (10, 20, 30) - In range
+                                                  // Pixel 1: (5, 20, 30)  - Out of range (ch 0 low)
+                                                  // Pixel 2: (100, 100, 100) - Out of range (high)
         src.data = vec![10, 20, 30, 5, 20, 30, 100, 100, 100];
 
         let mut lower = Matrix::<u8>::new(1, 3, 3);

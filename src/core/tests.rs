@@ -284,7 +284,10 @@ mod tests {
         // Norms
         assert_eq!(norm(&m, NormTypes::Inf, None).unwrap(), 3.0);
         assert_eq!(norm(&m, NormTypes::L1, None).unwrap(), 6.0);
-        assert_eq!(norm(&m, NormTypes::L2, None).unwrap(), (1.0f64 + 4.0 + 9.0).sqrt());
+        assert_eq!(
+            norm(&m, NormTypes::L2, None).unwrap(),
+            (1.0f64 + 4.0 + 9.0).sqrt()
+        );
 
         // Normalize MINMAX to [0, 1]
         let mut m_minmax = Matrix::<f64>::new(1, 3, 1);
