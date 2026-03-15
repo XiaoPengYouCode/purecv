@@ -322,12 +322,12 @@ where
                             let src_y = border_interpolate(
                                 y_i32 + ky - radius,
                                 rows_i32,
-                                BorderTypes::REFLECT_101,
+                                BorderTypes::Reflect101,
                             );
                             let src_x = border_interpolate(
                                 x_i32 + kx - radius,
                                 cols_i32,
-                                BorderTypes::REFLECT_101,
+                                BorderTypes::Reflect101,
                             );
 
                             if let Some(&val) = src.at(src_y, src_x, c) {

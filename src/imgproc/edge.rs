@@ -83,7 +83,7 @@ where
         aperture_size,
         1.0,
         0.0,
-        BorderTypes::REFLECT_101,
+        BorderTypes::Reflect101,
     )?;
     let dy = sobel(
         &src_f64,
@@ -92,7 +92,7 @@ where
         aperture_size,
         1.0,
         0.0,
-        BorderTypes::REFLECT_101,
+        BorderTypes::Reflect101,
     )?;
 
     let mut map = Matrix::<f32>::new(rows, cols, 1);

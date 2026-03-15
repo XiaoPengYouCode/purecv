@@ -34,6 +34,23 @@
  *
  */
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+/// Returns the number of ticks.
+/// In this implementation, it returns the number of nanoseconds since the first call.
+pub fn get_tick_count() -> i64 {
+    let start = *START_TIME.get_or_init(Instant::now);
+    start.elapsed().as_nanos() as i64
+}
+
+/// Returns the number of ticks per second.
+pub fn get_tick_frequency() -> f64 {
+    1_000_000_000.0
+}
+
 /// Template class specifying a continuous subsequence (slice) of a sequence.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct Range {
@@ -80,14 +97,14 @@ pub fn border_interpolate(p: i32, len: i32, border_type: crate::core::types::Bor
 
     use crate::core::types::BorderTypes;
     match border_type {
-        BorderTypes::REPLICATE => {
+        BorderTypes::Replicate => {
             if p < 0 {
                 0
             } else {
                 len - 1
             }
         }
-        BorderTypes::REFLECT => {
+        BorderTypes::Reflect => {
             let mut p = p;
             if len == 1 {
                 return 0;
@@ -103,7 +120,7 @@ pub fn border_interpolate(p: i32, len: i32, border_type: crate::core::types::Bor
             }
             p
         }
-        BorderTypes::REFLECT_101 => {
+        BorderTypes::Reflect101 => {
             let mut p = p;
             if len == 1 {
                 return 0;
@@ -119,14 +136,14 @@ pub fn border_interpolate(p: i32, len: i32, border_type: crate::core::types::Bor
             }
             p
         }
-        BorderTypes::WRAP => {
+        BorderTypes::Wrap => {
             if p < 0 {
                 (p % len + len) % len
             } else {
                 p % len
             }
         }
-        BorderTypes::CONSTANT => -1,
+        BorderTypes::Constant => -1,
         _ => -1,
     }
 }

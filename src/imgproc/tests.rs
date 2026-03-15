@@ -43,7 +43,7 @@ mod tests {
     fn test_blur() {
         let m = Matrix::from_vec(3, 3, 1, vec![10u8, 10, 10, 10, 10, 10, 10, 10, 10]);
         let ksize = Size2i::new(3, 3);
-        let res = blur(&m, ksize, Point2i::new(-1, -1), BorderTypes::REFLECT_101).unwrap();
+        let res = blur(&m, ksize, Point2i::new(-1, -1), BorderTypes::Reflect101).unwrap();
         assert_eq!(res.data, vec![10u8; 9]);
     }
 
@@ -57,7 +57,7 @@ mod tests {
             ksize,
             Point2i::new(-1, -1),
             false,
-            BorderTypes::REFLECT_101,
+            BorderTypes::Reflect101,
         )
         .unwrap();
         for val in res.data {
@@ -69,7 +69,7 @@ mod tests {
     fn test_gaussian_blur() {
         let m = Matrix::from_vec(5, 5, 1, vec![100u8; 25]);
         let ksize = Size2i::new(3, 3);
-        let res = gaussian_blur(&m, ksize, 1.0, 1.0, BorderTypes::REFLECT_101).unwrap();
+        let res = gaussian_blur(&m, ksize, 1.0, 1.0, BorderTypes::Reflect101).unwrap();
         // Since all pixels are 100, the result should be 100 (normalized)
         for val in res.data {
             assert!(val >= 99 && val <= 101); // Allow small deviation for rounding
@@ -99,7 +99,7 @@ mod tests {
         }
         let src = Matrix::from_vec(5, 5, 1, data);
 
-        let res = bilateral_filter(&src, 5, 50.0, 50.0, BorderTypes::REFLECT_101).unwrap();
+        let res = bilateral_filter(&src, 5, 50.0, 50.0, BorderTypes::Reflect101).unwrap();
 
         // Edge should be preserved.
         // Row 2, Col 2 is x=2, y=2. Value is 0.
@@ -124,7 +124,7 @@ mod tests {
 
         // Sobel dx=1, dy=0 should detect the vertical edge (x direction derivative)
         // With ksize=3, scale=1.0, delta=0.0
-        let _res = sobel(&src, 1, 0, 3, 1.0, 0.0, BorderTypes::REFLECT_101).unwrap();
+        let _res = sobel(&src, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
 
         // At the edge (x=4 to x=5), the derivative should be high.
         // Neighbors: x=4 (0), x=6 (255) -> 255 - 0 = 255.
@@ -135,7 +135,7 @@ mod tests {
 
         let src_f32: Matrix<f32> =
             Matrix::from_vec(10, 10, 1, src.data.iter().map(|&v| v as f32).collect());
-        let res_f32 = sobel(&src_f32, 1, 0, 3, 1.0, 0.0, BorderTypes::REFLECT_101).unwrap();
+        let res_f32 = sobel(&src_f32, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
 
         let edge_val = *res_f32.at(5, 5, 0).unwrap();
         assert!(edge_val > 500.0); // 255 * 4 = 1020 expected for Sobel ksize=3
@@ -151,7 +151,7 @@ mod tests {
         }
         let src = Matrix::<f32>::from_vec(10, 10, 1, data.iter().map(|&v| v as f32).collect());
 
-        let res = scharr(&src, 1, 0, 1.0, 0.0, BorderTypes::REFLECT_101).unwrap();
+        let res = scharr(&src, 1, 0, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
         let edge_val = *res.at(5, 5, 0).unwrap();
         // Scharr weight for center row is 10, total 3+10+3 = 16.
         // Expected: 255 * 16 = 4080
@@ -162,7 +162,7 @@ mod tests {
     fn test_laplacian() {
         // Uniform image
         let src = Matrix::<f32>::from_vec(5, 5, 1, vec![100.0; 25]);
-        let res = laplacian(&src, 1, 1.0, 0.0, BorderTypes::REFLECT_101).unwrap();
+        let res = laplacian(&src, 1, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
 
         // Laplacian of a uniform field should be 0
         for &val in &res.data {
@@ -172,7 +172,7 @@ mod tests {
         // Image with a peak at (2, 2)
         let mut src_peak = Matrix::<f64>::new(5, 5, 1);
         src_peak.set(2, 2, 0, 255.0);
-        let res_peak = laplacian(&src_peak, 1, 1.0, 0.0, BorderTypes::REFLECT_101).unwrap();
+        let res_peak = laplacian(&src_peak, 1, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
         // Laplacian [0, 1, 0; 1, -4, 1; 0, 1, 0] * 255 = [..., -4*255, ...] = -1020
         assert!(((*res_peak.at(2, 2, 0).unwrap() + 1020.0f64).abs()) < 1e-5);
     }

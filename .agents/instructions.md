@@ -23,6 +23,19 @@ You are an expert Rust systems engineer porting OpenCV (C++) to Pure Rust. The g
 - Create tests for every functions / type and benchmarks if possible.
 - Add HEADER.txt to every new file you create as defined in `.agents\skills\license-header-adder\SKILL.md`.
 
+## ✅ Code Quality Checks
+Before committing or submitting a PR, you **must** run the following checks and fix all issues:
+
+1. **Formatting:** Run `cargo fmt -- --check` to verify code style. If it reports diffs, run `cargo fmt` to auto-fix, then stage the changes.
+2. **Linting:** Run `cargo clippy` and resolve **all** warnings. Common issues include:
+   - Unnecessary type casts (e.g., `x as usize` when `x` is already `usize`).
+   - Legacy numeric constants (e.g., `std::f64::MAX` → `f64::MAX`).
+   - Redundant clones, unused imports, and needless borrows.
+3. **Tests:** Run `cargo test` to ensure all unit tests and doc-tests pass.
+4. **Order of execution:** Always run in this order: `cargo fmt`, `cargo clippy`, `cargo test`.
+
+> **CI will reject any PR that fails `cargo fmt -- --check` or `cargo clippy`.**
+
 ## 🐙 Github Instructions & Conventional Commits
 - When creating a PR always start from the `dev` branch and point against `dev` branch.
 - **MANDATORY:** You must use the [Conventional Commits](https://www.conventionalcommits.org/) specification for all commit messages. This is strictly required for our automated `git-cliff` changelog generation.

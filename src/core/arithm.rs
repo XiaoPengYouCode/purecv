@@ -35,10 +35,10 @@
  */
 
 use crate::core::error::{PureCvError, Result};
-use crate::core::types::Scalar;
-use crate::core::Matrix;
-use num_traits::{Bounded, FromPrimitive, Num, ToPrimitive};
-use std::ops::{BitAnd, BitOr, BitXor, Not};
+use crate::core::types::{CmpTypes, NormTypes, ReduceTypes, Scalar};
+use crate::core::{DataType, Matrix};
+use num_traits::{Bounded, FromPrimitive, Num, SaturatingAdd, SaturatingSub, ToPrimitive};
+use std::ops::{BitAnd, BitOr, BitXor, Not, Sub};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -78,6 +78,43 @@ macro_rules! binary_op {
 }
 
 /// Internal macro to handle feature-gated loop execution for unary operations.
+macro_rules! binary_op_scalar {
+    ($dst:expr, $src:expr, $scalar:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident, $sc:ident| $body:expr) => {
+        let channels = $src.channels as usize;
+        let scalar_data = $scalar.v;
+
+        #[cfg(feature = "parallel")]
+        {
+            $dst.data
+                .par_chunks_exact_mut(channels)
+                .zip($src.data.par_chunks_exact(channels))
+                .for_each(|(d_chunk, s_chunk)| {
+                    for i in 0..channels {
+                        let $d: &mut $t_dst = &mut d_chunk[i];
+                        let $s: $t_src = s_chunk[i];
+                        let $sc = scalar_data[i];
+                        $body
+                    }
+                });
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            $dst.data
+                .chunks_exact_mut(channels)
+                .zip($src.data.chunks_exact(channels))
+                .for_each(|(d_chunk, s_chunk)| {
+                    for i in 0..channels {
+                        let $d: &mut $t_dst = &mut d_chunk[i];
+                        let $s: $t_src = s_chunk[i];
+                        let $sc = scalar_data[i];
+                        $body
+                    }
+                });
+        }
+    };
+}
+
 macro_rules! unary_op {
     ($dst:expr, $src:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident| $body:expr) => {
         #[cfg(feature = "parallel")]
@@ -104,6 +141,76 @@ macro_rules! unary_op {
                 });
         }
     };
+}
+
+/// Adds a scalar value to a matrix: dst = src1 + scalar
+pub fn add_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
+where
+    T: DataType
+        + SaturatingAdd
+        + FromPrimitive
+        + ToPrimitive
+        + Send
+        + Sync
+        + 'static
+        + Default
+        + Copy,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        *d = s.saturating_add(&T::from_f64(sc).unwrap_or_default());
+    });
+    Ok(dst)
+}
+
+/// Subtracts a scalar value from a matrix: dst = src1 - scalar
+pub fn subtract_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
+where
+    T: DataType
+        + SaturatingSub
+        + FromPrimitive
+        + ToPrimitive
+        + Send
+        + Sync
+        + 'static
+        + Default
+        + Copy,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        *d = s.saturating_sub(&T::from_f64(sc).unwrap_or_default());
+    });
+    Ok(dst)
+}
+
+/// Multiplies a matrix by a scalar value: dst = src1 * scalar
+pub fn multiply_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
+where
+    T: DataType + FromPrimitive + ToPrimitive + Send + Sync + 'static + Default + Copy,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        let val = s.to_f64().unwrap_or_default() * sc;
+        *d = T::from_f64(val).unwrap_or_default();
+    });
+    Ok(dst)
+}
+
+/// Divides a matrix by a scalar value: dst = src1 / scalar
+pub fn divide_scalar<T>(src1: &Matrix<T>, scalar: Scalar<f64>) -> Result<Matrix<T>>
+where
+    T: DataType + FromPrimitive + ToPrimitive + Send + Sync + 'static + Default + Copy,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        if sc != 0.0 {
+            let val = s.to_f64().unwrap_or_default() / sc;
+            *d = T::from_f64(val).unwrap_or_default();
+        } else {
+            *d = T::default();
+        }
+    });
+    Ok(dst)
 }
 
 /// Calculates the per-element sum of two matrices.
@@ -142,27 +249,6 @@ where
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 - s2);
-
-    Ok(dst)
-}
-
-/// Calculates the per-element absolute difference between two matrices.
-///
-/// dst = |src1 - src2|
-pub fn absdiff<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
-where
-    T: Num + Copy + Send + Sync + PartialOrd + Bounded + Default + 'static,
-{
-    if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
-        return Err(PureCvError::InvalidDimensions(
-            "Matrices must have the same dimensions".to_string(),
-        ));
-    }
-
-    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
-
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d =
-        if s1 > s2 { s1 - s2 } else { s2 - s1 });
 
     Ok(dst)
 }
@@ -273,6 +359,36 @@ where
     Ok(dst)
 }
 
+/// Calculates the per-element bit-wise conjunction of a matrix and a scalar.
+pub fn bitwise_and_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Copy + Send + Sync + BitAnd<Output = T> + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| *d = s & sc);
+    Ok(dst)
+}
+
+/// Calculates the per-element bit-wise disjunction of a matrix and a scalar.
+pub fn bitwise_or_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Copy + Send + Sync + BitOr<Output = T> + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| *d = s | sc);
+    Ok(dst)
+}
+
+/// Calculates the per-element bit-wise "exclusive or" operation on a matrix and a scalar.
+pub fn bitwise_xor_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Copy + Send + Sync + BitXor<Output = T> + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| *d = s ^ sc);
+    Ok(dst)
+}
+
 /// Inverts every bit of every array element.
 ///
 /// dst = ~src
@@ -285,6 +401,860 @@ where
     unary_op!(dst, src, T, T, |d, s| *d = !s);
 
     Ok(dst)
+}
+
+/// Calculates the per-element minimum of two matrices.
+pub fn min<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    if !src1.dims_match(src2) {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same dimensions".to_string(),
+        ));
+    }
+
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
+        *d = if s1 < s2 { s1 } else { s2 };
+    });
+
+    Ok(dst)
+}
+
+/// Calculates the per-element maximum of two matrices.
+pub fn max<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    if !src1.dims_match(src2) {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same dimensions".to_string(),
+        ));
+    }
+
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
+        *d = if s1 > s2 { s1 } else { s2 };
+    });
+
+    Ok(dst)
+}
+
+/// Calculates the per-element absolute difference between two matrices.
+pub fn abs_diff<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    if !src1.dims_match(src2) {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same dimensions".to_string(),
+        ));
+    }
+
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
+        *d = if s1 > s2 { s1 - s2 } else { s2 - s1 };
+    });
+
+    Ok(dst)
+}
+
+/// Calculates the per-element minimum of a matrix and a scalar.
+pub fn min_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        *d = if s < sc { s } else { sc };
+    });
+    Ok(dst)
+}
+
+/// Calculates the per-element maximum of a matrix and a scalar.
+pub fn max_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        *d = if s > sc { s } else { sc };
+    });
+    Ok(dst)
+}
+
+/// Calculates the per-element absolute difference between a matrix and a scalar.
+pub fn abs_diff_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+    binary_op_scalar!(&mut dst, src1, scalar, T, T, |d, s, sc| {
+        *d = if s > sc { s - sc } else { sc - s };
+    });
+    Ok(dst)
+}
+
+/// Performs per-element comparison of two matrices.
+///
+/// The function compares the corresponding elements of two matrices.
+/// The result is a 8-bit single-channel image where elements are 255 (true) or 0 (false).
+pub fn compare<T>(src1: &Matrix<T>, src2: &Matrix<T>, cmpop: CmpTypes) -> Result<Matrix<u8>>
+where
+    T: Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    if !src1.dims_match(src2) {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same dimensions".to_string(),
+        ));
+    }
+
+    let mut dst = Matrix::<u8>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op!(dst, src1, src2, u8, T, |d, s1, s2| {
+        let res = match cmpop {
+            CmpTypes::Eq => s1 == s2,
+            CmpTypes::Gt => s1 > s2,
+            CmpTypes::Ge => s1 >= s2,
+            CmpTypes::Lt => s1 < s2,
+            CmpTypes::Le => s1 <= s2,
+            CmpTypes::Ne => s1 != s2,
+        };
+        *d = if res { 255 } else { 0 };
+    });
+
+    Ok(dst)
+}
+
+/// Performs per-element comparison of a matrix and a scalar.
+///
+/// The function compares every element of the matrix with the corresponding scalar value.
+/// The result is a 8-bit image where elements are 255 (true) or 0 (false).
+pub fn compare_scalar<T>(src1: &Matrix<T>, scalar: Scalar<T>, cmpop: CmpTypes) -> Result<Matrix<u8>>
+where
+    T: Copy + Send + Sync + PartialOrd + Default + 'static,
+{
+    let mut dst = Matrix::<u8>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op_scalar!(&mut dst, src1, scalar, u8, T, |d, s, sc| {
+        let res = match cmpop {
+            CmpTypes::Eq => s == sc,
+            CmpTypes::Gt => s > sc,
+            CmpTypes::Ge => s >= sc,
+            CmpTypes::Lt => s < sc,
+            CmpTypes::Le => s <= sc,
+            CmpTypes::Ne => s != sc,
+        };
+        *d = if res { 255 } else { 0 };
+    });
+
+    Ok(dst)
+}
+
+/// Checks if array elements lie between the elements of two other arrays.
+///
+/// For multi-channel arrays, each channel is checked independently:
+/// `dst(I) = lowerb(I)_0 <= src(I)_0 <= upperb(I)_0 && lowerb(I)_1 <= src(I)_1 <= upperb(I)_1 ...`
+pub fn in_range<T>(
+    src: &Matrix<T>,
+    lowerb: &Matrix<T>,
+    upperb: &Matrix<T>,
+    dst: &mut Matrix<u8>,
+) -> Result<()>
+where
+    T: DataType + PartialOrd + Default + Copy + Sync + Send,
+{
+    if src.rows != lowerb.rows
+        || src.cols != lowerb.cols
+        || src.channels != lowerb.channels
+        || src.rows != upperb.rows
+        || src.cols != upperb.cols
+        || src.channels != upperb.channels
+    {
+        return Err(PureCvError::InvalidInput(
+            "Size or channels mismatch".into(),
+        ));
+    }
+
+    dst.create(src.rows, src.cols, 1);
+    let s = src.as_slice();
+    let l = lowerb.as_slice();
+    let u = upperb.as_slice();
+    let d = dst.as_mut_slice();
+    let channels = src.channels;
+
+    #[cfg(feature = "parallel")]
+    {
+        d.par_iter_mut().enumerate().for_each(|(i, mask_val)| {
+            let offset = i * channels;
+            let mut res = true;
+            for c in 0..channels {
+                let val = s[offset + c];
+                if val < l[offset + c] || val > u[offset + c] {
+                    res = false;
+                    break;
+                }
+            }
+            *mask_val = if res { 255 } else { 0 };
+        });
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        for i in 0..d.len() {
+            let offset = i * channels;
+            let mut res = true;
+            for c in 0..channels {
+                let val = s[offset + c];
+                if val < l[offset + c] || val > u[offset + c] {
+                    res = false;
+                    break;
+                }
+            }
+            d[i] = if res { 255 } else { 0 };
+        }
+    }
+    Ok(())
+}
+
+/// Checks if array elements lie between two scalars.
+///
+/// For multi-channel arrays, each channel is checked independently and the
+/// result is ANDed: `dst(I) = lowerb_0 <= src(I)_0 <= upperb_0 && lowerb_1 <= src(I)_1 <= upperb_1 ...`
+pub fn in_range_scalar<T>(
+    src: &Matrix<T>,
+    lowerb: &[T],
+    upperb: &[T],
+    dst: &mut Matrix<u8>,
+) -> Result<()>
+where
+    T: DataType + PartialOrd + Default + Copy + Sync + Send,
+{
+    if lowerb.len() < src.channels || upperb.len() < src.channels {
+        return Err(PureCvError::InvalidInput(
+            "Scalars must have at least as many elements as src channels".into(),
+        ));
+    }
+
+    dst.create(src.rows, src.cols, 1);
+    let channels = src.channels;
+    let src_data = src.as_slice();
+    let dst_data = dst.as_mut_slice();
+
+    #[cfg(feature = "parallel")]
+    {
+        dst_data
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(pixel_idx, d)| {
+                let offset = pixel_idx * channels;
+                let mut res = true;
+                for c in 0..channels {
+                    let s = src_data[offset + c];
+                    let l = lowerb[c];
+                    let u = upperb[c];
+                    if s < l || s > u {
+                        res = false;
+                        break;
+                    }
+                }
+                *d = if res { 255 } else { 0 };
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for pixel_idx in 0..dst_data.len() {
+            let offset = pixel_idx * channels;
+            let mut res = true;
+            for c in 0..channels {
+                let s = src_data[offset + c];
+                let l = lowerb[c];
+                let u = upperb[c];
+                if s < l || s > u {
+                    res = false;
+                    break;
+                }
+            }
+            dst_data[pixel_idx] = if res { 255 } else { 0 };
+        }
+    }
+
+    Ok(())
+}
+
+/// Calculates the per-element absolute difference between two matrices.
+///
+/// dst = |src1 - src2|
+pub fn absdiff<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
+where
+    T: Num + Copy + Send + Sync + PartialOrd + Sub<Output = T> + Default + 'static,
+{
+    if !src1.dims_match(src2) {
+        return Err(PureCvError::InvalidDimensions(
+            "Matrices must have the same dimensions".to_string(),
+        ));
+    }
+
+    let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
+
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
+        *d = if s1 > s2 { s1 - s2 } else { s2 - s1 };
+    });
+
+    Ok(dst)
+}
+
+/// Calculates the sum of array elements.
+///
+/// Returns a Scalar with the sum of each channel.
+pub fn sum<T>(src: &Matrix<T>) -> Scalar<f64>
+where
+    T: Num + ToPrimitive + Copy + Send + Sync + 'static,
+{
+    #[cfg(feature = "parallel")]
+    {
+        let sums = src
+            .data
+            .par_chunks_exact(src.channels)
+            .fold(
+                || [0.0f64; 4],
+                |mut acc, pixel| {
+                    for (i, &val) in pixel.iter().enumerate() {
+                        if i < 4 {
+                            acc[i] += val.to_f64().unwrap_or(0.0);
+                        }
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || [0.0f64; 4],
+                |mut a, b| {
+                    for i in 0..4 {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
+        Scalar::new(sums[0], sums[1], sums[2], sums[3])
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        let mut sums = [0.0f64; 4];
+        for pixel in src.data.chunks_exact(src.channels as usize) {
+            for (i, &val) in pixel.iter().enumerate() {
+                if i < 4 {
+                    sums[i] += val.to_f64().unwrap_or(0.0);
+                }
+            }
+        }
+        Scalar::new(sums[0], sums[1], sums[2], sums[3])
+    }
+}
+
+/// Calculates the mean of matrix elements.
+///
+/// Returns a Scalar with the mean of each channel.
+pub fn mean<T>(src: &Matrix<T>) -> Scalar<f64>
+where
+    T: DataType + Num + ToPrimitive + Copy + Send + Sync + 'static,
+{
+    let s = sum(src);
+    let total_pixels = (src.rows * src.cols) as f64;
+    Scalar::new(
+        s.v[0] / total_pixels,
+        s.v[1] / total_pixels,
+        s.v[2] / total_pixels,
+        s.v[3] / total_pixels,
+    )
+}
+
+/// Calculates a mean and standard deviation of matrix elements.
+pub fn mean_std_dev<T>(src: &Matrix<T>) -> (Scalar<f64>, Scalar<f64>)
+where
+    T: DataType + Num + ToPrimitive + Copy + Send + Sync + 'static,
+{
+    let m = mean(src);
+    let mut sq_sum = [0.0f64; 4];
+    let total_pixels = (src.rows * src.cols) as f64;
+
+    for pixel in src.data.chunks_exact(src.channels) {
+        for (i, &val) in pixel.iter().enumerate() {
+            if i < 4 {
+                let v = val.to_f64().unwrap_or(0.0) - m.v[i];
+                sq_sum[i] += v * v;
+            }
+        }
+    }
+
+    let std_dev = Scalar::new(
+        (sq_sum[0] / total_pixels).sqrt(),
+        (sq_sum[1] / total_pixels).sqrt(),
+        (sq_sum[2] / total_pixels).sqrt(),
+        (sq_sum[3] / total_pixels).sqrt(),
+    );
+
+    (m, std_dev)
+}
+
+/// Calculates an absolute array norm.
+///
+/// Returns the norm value as f64.
+pub fn norm<T>(src: &Matrix<T>, norm_type: NormTypes, mask: Option<&Matrix<u8>>) -> Result<f64>
+where
+    T: DataType + ToPrimitive + Default + Copy + Sync + Send,
+{
+    match norm_type {
+        NormTypes::Inf => {
+            #[cfg(feature = "parallel")]
+            {
+                if let Some(m) = mask {
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .zip(m.data.par_iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
+                        .reduce(|| 0.0, f64::max))
+                } else {
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .map(|&x| x.to_f64().unwrap_or(0.0).abs())
+                        .reduce(|| 0.0, f64::max))
+                }
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                if let Some(m) = mask {
+                    Ok(src
+                        .data
+                        .iter()
+                        .zip(m.data.iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
+                        .fold(0.0, f64::max))
+                } else {
+                    Ok(src
+                        .data
+                        .iter()
+                        .map(|&x| x.to_f64().unwrap_or(0.0).abs())
+                        .fold(0.0, f64::max))
+                }
+            }
+        }
+        NormTypes::L1 => {
+            #[cfg(feature = "parallel")]
+            {
+                if let Some(m) = mask {
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .zip(m.data.par_iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
+                        .sum::<f64>())
+                } else {
+                    Ok(src
+                        .data
+                        .par_iter()
+                        .map(|&x| x.to_f64().unwrap_or(0.0).abs())
+                        .sum::<f64>())
+                }
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                if let Some(m) = mask {
+                    Ok(src
+                        .data
+                        .iter()
+                        .zip(m.data.iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| x.to_f64().unwrap_or(0.0).abs())
+                        .sum::<f64>())
+                } else {
+                    Ok(src
+                        .data
+                        .iter()
+                        .map(|&x| x.to_f64().unwrap_or(0.0).abs())
+                        .sum::<f64>())
+                }
+            }
+        }
+        NormTypes::L2 => {
+            #[cfg(feature = "parallel")]
+            {
+                let sq_sum = if let Some(m) = mask {
+                    src.data
+                        .par_iter()
+                        .zip(m.data.par_iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| {
+                            let val = x.to_f64().unwrap_or(0.0);
+                            val * val
+                        })
+                        .sum::<f64>()
+                } else {
+                    src.data
+                        .par_iter()
+                        .map(|&x| {
+                            let val = x.to_f64().unwrap_or(0.0);
+                            val * val
+                        })
+                        .sum::<f64>()
+                };
+                Ok(sq_sum.sqrt())
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                let sq_sum = if let Some(m) = mask {
+                    src.data
+                        .iter()
+                        .zip(m.data.iter())
+                        .filter(|(_, &mask_val)| mask_val != 0)
+                        .map(|(&x, _)| {
+                            let val = x.to_f64().unwrap_or(0.0);
+                            val * val
+                        })
+                        .sum::<f64>()
+                } else {
+                    src.data
+                        .iter()
+                        .map(|&x| {
+                            let val = x.to_f64().unwrap_or(0.0);
+                            val * val
+                        })
+                        .sum::<f64>()
+                };
+                Ok(sq_sum.sqrt())
+            }
+        }
+        _ => Err(PureCvError::NotImplemented(format!(
+            "Norm type {:?} is not implemented",
+            norm_type
+        ))),
+    }
+}
+
+/// Normalizes the norm or value range of an array.
+///
+/// For MINMAX normalization, alpha is the lower bound and beta is the upper bound.
+/// For other norms, alpha is the norm value to reach.
+pub fn normalize<T>(
+    src: &Matrix<T>,
+    dst: &mut Matrix<T>,
+    alpha: f64,
+    beta: f64,
+    norm_type: NormTypes,
+    _dtype: i32,
+    mask: Option<&Matrix<u8>>,
+) -> Result<()>
+where
+    T: DataType + Send + Sync + FromPrimitive + Default + Copy + ToPrimitive,
+{
+    // If dtype is negative, we keep source type. Currently we don't support converting here yet,
+    // so we just ignore it if it equals T's depth.
+
+    match norm_type {
+        NormTypes::MinMax => {
+            let mut min_val = f64::MAX;
+            let mut max_val = f64::MIN;
+
+            if let Some(m) = mask {
+                for (&val, &mask_val) in src.data.iter().zip(m.data.iter()) {
+                    if mask_val != 0 {
+                        let v = val.to_f64().unwrap_or(0.0);
+                        if v < min_val {
+                            min_val = v;
+                        }
+                        if v > max_val {
+                            max_val = v;
+                        }
+                    }
+                }
+            } else {
+                for &val in src.data.iter() {
+                    let v = val.to_f64().unwrap_or(0.0);
+                    if v < min_val {
+                        min_val = v;
+                    }
+                    if v > max_val {
+                        max_val = v;
+                    }
+                }
+            }
+
+            let scale = if max_val != min_val {
+                (beta - alpha) / (max_val - min_val)
+            } else {
+                0.0
+            };
+
+            #[cfg(feature = "parallel")]
+            {
+                if let Some(m) = mask {
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .zip(m.data.par_iter())
+                        .for_each(|((d, &s), &mask_val)| {
+                            if mask_val != 0 {
+                                let v = s.to_f64().unwrap_or(0.0);
+                                let res = (v - min_val) * scale + alpha;
+                                *d = T::from_f64(res).unwrap_or(T::default());
+                            }
+                        });
+                } else {
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .for_each(|(d, &s)| {
+                            let v = s.to_f64().unwrap_or(0.0);
+                            let res = (v - min_val) * scale + alpha;
+                            *d = T::from_f64(res).unwrap_or(T::default());
+                        });
+                }
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                if let Some(m) = mask {
+                    for (i, &mask_val) in m.data.iter().enumerate() {
+                        if mask_val != 0 {
+                            let v = src.data[i].to_f64().unwrap_or(0.0);
+                            let res = (v - min_val) * scale + alpha;
+                            dst.data[i] = T::from_f64(res).unwrap_or(T::default());
+                        }
+                    }
+                } else {
+                    for (d, s) in dst.data.iter_mut().zip(src.data.iter()) {
+                        let v = s.to_f64().unwrap_or(0.0);
+                        let res = (v - min_val) * scale + alpha;
+                        *d = T::from_f64(res).unwrap_or(T::default());
+                    }
+                }
+            }
+        }
+        NormTypes::L1 | NormTypes::L2 | NormTypes::Inf => {
+            let n = norm(src, norm_type, mask)?;
+            let scale = if n != 0.0 { alpha / n } else { 0.0 };
+
+            #[cfg(feature = "parallel")]
+            {
+                if let Some(m) = mask {
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .zip(m.data.par_iter())
+                        .for_each(|((d, &s), &mask_val)| {
+                            if mask_val != 0 {
+                                let res = s.to_f64().unwrap_or(0.0) * scale;
+                                *d = T::from_f64(res).unwrap_or(T::default());
+                            }
+                        });
+                } else {
+                    dst.data
+                        .par_iter_mut()
+                        .zip(src.data.par_iter())
+                        .for_each(|(d, &s)| {
+                            let res = s.to_f64().unwrap_or(0.0) * scale;
+                            *d = T::from_f64(res).unwrap_or(T::default());
+                        });
+                }
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                if let Some(m) = mask {
+                    for (i, &mask_val) in m.data.iter().enumerate() {
+                        if mask_val != 0 {
+                            let res = src.data[i].to_f64().unwrap_or(0.0) * scale;
+                            dst.data[i] = T::from_f64(res).unwrap_or(T::default());
+                        }
+                    }
+                } else {
+                    for (d, s) in dst.data.iter_mut().zip(src.data.iter()) {
+                        let res = s.to_f64().unwrap_or(0.0) * scale;
+                        *d = T::from_f64(res).unwrap_or(T::default());
+                    }
+                }
+            }
+        }
+        _ => {
+            return Err(PureCvError::NotImplemented(
+                "Requested normalization type is not implemented yet".to_string(),
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Reduces a matrix to a vector.
+///
+/// dim 0: reduced to 1 row.
+/// dim 1: reduced to 1 column.
+pub fn reduce<T>(src: &Matrix<T>, dim: i32, reduce_op: ReduceTypes) -> Result<Matrix<T>>
+where
+    T: DataType
+        + Num
+        + ToPrimitive
+        + FromPrimitive
+        + Copy
+        + Send
+        + Sync
+        + PartialOrd
+        + Default
+        + 'static,
+{
+    let (rows, cols) = if dim == 0 {
+        (1, src.cols)
+    } else if dim == 1 {
+        (src.rows, 1)
+    } else {
+        return Err(PureCvError::InvalidInput("dim must be 0 or 1".to_string()));
+    };
+
+    let mut dst_data = vec![T::default(); rows * cols * src.channels];
+    let channels = src.channels;
+    let src_rows = src.rows;
+    let src_cols = src.cols;
+
+    #[cfg(feature = "parallel")]
+    {
+        dst_data.par_iter_mut().enumerate().for_each(|(idx, d)| {
+            let channel = idx % channels;
+            let pos = idx / channels;
+
+            let count = if dim == 0 { src_rows } else { src_cols };
+            let mut accum: f64 = match reduce_op {
+                ReduceTypes::Sum | ReduceTypes::Avg => 0.0,
+                ReduceTypes::Max => f64::MIN,
+                ReduceTypes::Min => f64::MAX,
+            };
+
+            for i in 0..count {
+                let (r, c) = if dim == 0 { (i, pos) } else { (pos, i) };
+                if let Some(val) = src.get(r, c, channel).and_then(|v| v.to_f64()) {
+                    match reduce_op {
+                        ReduceTypes::Sum | ReduceTypes::Avg => accum += val,
+                        ReduceTypes::Max => {
+                            if val > accum {
+                                accum = val;
+                            }
+                        }
+                        ReduceTypes::Min => {
+                            if val < accum {
+                                accum = val;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let res = if reduce_op == ReduceTypes::Avg {
+                accum / count as f64
+            } else {
+                accum
+            };
+            *d = T::from_f64(res).unwrap_or_default();
+        });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for idx in 0..dst_data.len() {
+            let channel = idx % channels;
+            let pos = idx / channels;
+
+            let count = if dim == 0 { src_rows } else { src_cols };
+            let mut accum: f64 = match reduce_op {
+                ReduceTypes::Sum | ReduceTypes::Avg => 0.0,
+                ReduceTypes::Max => f64::MIN,
+                ReduceTypes::Min => f64::MAX,
+            };
+
+            for i in 0..count {
+                let (r, c) = if dim == 0 { (i, pos) } else { (pos, i) };
+                if let Some(val) = src.get(r, c, channel).and_then(|v| v.to_f64()) {
+                    match reduce_op {
+                        ReduceTypes::Sum | ReduceTypes::Avg => accum += val,
+                        ReduceTypes::Max => {
+                            if val > accum {
+                                accum = val;
+                            }
+                        }
+                        ReduceTypes::Min => {
+                            if val < accum {
+                                accum = val;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let res = if reduce_op == ReduceTypes::Avg {
+                accum / count as f64
+            } else {
+                accum
+            };
+            dst_data[idx] = T::from_f64(res).unwrap_or_default();
+        }
+    }
+
+    Ok(Matrix {
+        rows,
+        cols,
+        channels,
+        data: dst_data,
+    })
+}
+
+/// Counts non-zero array elements.
+pub fn count_non_zero<T>(src: &Matrix<T>) -> i32
+where
+    T: Num + Copy + Send + Sync + 'static,
+{
+    #[cfg(feature = "parallel")]
+    {
+        src.data.par_iter().filter(|&&x| !x.is_zero()).count() as i32
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        src.data.iter().filter(|&&x| !x.is_zero()).count() as i32
+    }
+}
+
+/// Finds the global minimum and maximum in an array and their locations.
+///
+/// Returns (min_val, max_val, min_loc, max_loc).
+/// Note: for multi-channel arrays, it finds min/max across all channels, but locations are indices in the flat array.
+pub fn min_max_loc<T>(src: &Matrix<T>) -> (f64, f64, (i32, i32), (i32, i32))
+where
+    T: Num + ToPrimitive + Copy + PartialOrd + Default + 'static,
+{
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
+    let mut min_loc = (0, 0);
+    let mut max_loc = (0, 0);
+
+    for i in 0..src.rows {
+        for j in 0..src.cols {
+            for ch in 0..src.channels {
+                let val = src.get(i, j, ch).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                if val < min_val {
+                    min_val = val;
+                    min_loc = (j as i32, i as i32);
+                }
+                if val > max_val {
+                    max_val = val;
+                    max_loc = (j as i32, i as i32);
+                }
+            }
+        }
+    }
+    (min_val, max_val, min_loc, max_loc)
 }
 
 /// Calculates the weighted sum of two matrices.
@@ -1073,6 +2043,272 @@ where
     Ok(true)
 }
 
+/// Calculates the magnitude of 2D vectors.
+///
+/// The function calculates the magnitude of 2D vectors formed
+/// from the corresponding elements of x and y arrays:
+/// `dst(I) = sqrt(x(I)^2 + y(I)^2)`
+///
+/// @sa cartToPolar, polarToCart, phase, sqrt
+pub fn magnitude<T>(x: &Matrix<T>, y: &Matrix<T>, dst: &mut Matrix<T>) -> Result<()>
+where
+    T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
+{
+    if !x.dims_match(y) {
+        return Err(PureCvError::InvalidDimensions(
+            "x and y must have the same dimensions".to_string(),
+        ));
+    }
+
+    dst.create(x.rows, x.cols, x.channels);
+
+    #[cfg(feature = "parallel")]
+    {
+        dst.data
+            .par_iter_mut()
+            .zip(x.data.par_iter())
+            .zip(y.data.par_iter())
+            .for_each(|((d, &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                *d = T::from_f64((xf * xf + yf * yf).sqrt()).unwrap_or_default();
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        dst.data
+            .iter_mut()
+            .zip(x.data.iter())
+            .zip(y.data.iter())
+            .for_each(|((d, &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                *d = T::from_f64((xf * xf + yf * yf).sqrt()).unwrap_or_default();
+            });
+    }
+
+    Ok(())
+}
+
+/// Calculates the rotation angle of 2D vectors.
+///
+/// The function calculates the rotation angle of each 2D vector that
+/// is formed from the corresponding elements of x and y:
+/// `angle(I) = atan2(y(I), x(I))`
+///
+/// When `angle_in_degrees` is true, the output angles are measured in
+/// degrees, otherwise in radians.
+///
+/// @sa cartToPolar, magnitude
+pub fn phase<T>(
+    x: &Matrix<T>,
+    y: &Matrix<T>,
+    angle: &mut Matrix<T>,
+    angle_in_degrees: bool,
+) -> Result<()>
+where
+    T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
+{
+    if !x.dims_match(y) {
+        return Err(PureCvError::InvalidDimensions(
+            "x and y must have the same dimensions".to_string(),
+        ));
+    }
+
+    angle.create(x.rows, x.cols, x.channels);
+
+    #[cfg(feature = "parallel")]
+    {
+        angle
+            .data
+            .par_iter_mut()
+            .zip(x.data.par_iter())
+            .zip(y.data.par_iter())
+            .for_each(|((d, &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                let mut a = yf.atan2(xf);
+                if a < 0.0 {
+                    a += 2.0 * std::f64::consts::PI;
+                }
+                if angle_in_degrees {
+                    a = a.to_degrees();
+                }
+                *d = T::from_f64(a).unwrap_or_default();
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        angle
+            .data
+            .iter_mut()
+            .zip(x.data.iter())
+            .zip(y.data.iter())
+            .for_each(|((d, &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                let mut a = yf.atan2(xf);
+                if a < 0.0 {
+                    a += 2.0 * std::f64::consts::PI;
+                }
+                if angle_in_degrees {
+                    a = a.to_degrees();
+                }
+                *d = T::from_f64(a).unwrap_or_default();
+            });
+    }
+
+    Ok(())
+}
+
+/// Calculates the magnitude and angle of 2D vectors.
+///
+/// The function calculates either the magnitude, angle, or both
+/// for every 2D vector (x(I), y(I)):
+/// `magnitude(I) = sqrt(x(I)^2 + y(I)^2)`
+/// `angle(I) = atan2(y(I), x(I))`
+///
+/// When `angle_in_degrees` is true, the output angles are measured in
+/// degrees, otherwise in radians.
+///
+/// @sa Sobel, Scharr
+pub fn cart_to_polar<T>(
+    x: &Matrix<T>,
+    y: &Matrix<T>,
+    mag: &mut Matrix<T>,
+    ang: &mut Matrix<T>,
+    angle_in_degrees: bool,
+) -> Result<()>
+where
+    T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
+{
+    if !x.dims_match(y) {
+        return Err(PureCvError::InvalidDimensions(
+            "x and y must have the same dimensions".to_string(),
+        ));
+    }
+
+    mag.create(x.rows, x.cols, x.channels);
+    ang.create(x.rows, x.cols, x.channels);
+
+    #[cfg(feature = "parallel")]
+    {
+        mag.data
+            .par_iter_mut()
+            .zip(ang.data.par_iter_mut())
+            .zip(x.data.par_iter())
+            .zip(y.data.par_iter())
+            .for_each(|(((m, a), &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                *m = T::from_f64((xf * xf + yf * yf).sqrt()).unwrap_or_default();
+                let mut angle = yf.atan2(xf);
+                if angle < 0.0 {
+                    angle += 2.0 * std::f64::consts::PI;
+                }
+                if angle_in_degrees {
+                    angle = angle.to_degrees();
+                }
+                *a = T::from_f64(angle).unwrap_or_default();
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        mag.data
+            .iter_mut()
+            .zip(ang.data.iter_mut())
+            .zip(x.data.iter())
+            .zip(y.data.iter())
+            .for_each(|(((m, a), &xv), &yv)| {
+                let xf = xv.to_f64().unwrap_or(0.0);
+                let yf = yv.to_f64().unwrap_or(0.0);
+                *m = T::from_f64((xf * xf + yf * yf).sqrt()).unwrap_or_default();
+                let mut angle = yf.atan2(xf);
+                if angle < 0.0 {
+                    angle += 2.0 * std::f64::consts::PI;
+                }
+                if angle_in_degrees {
+                    angle = angle.to_degrees();
+                }
+                *a = T::from_f64(angle).unwrap_or_default();
+            });
+    }
+
+    Ok(())
+}
+
+/// Calculates x and y coordinates of 2D vectors from their magnitude and angle.
+///
+/// The function calculates the Cartesian coordinates of each 2D vector
+/// represented by the corresponding elements of magnitude and angle:
+/// `x(I) = magnitude(I) * cos(angle(I))`
+/// `y(I) = magnitude(I) * sin(angle(I))`
+///
+/// When `angle_in_degrees` is true, the input angles are measured in
+/// degrees, otherwise in radians.
+///
+/// @sa cartToPolar, magnitude, phase
+pub fn polar_to_cart<T>(
+    mag: &Matrix<T>,
+    ang: &Matrix<T>,
+    x: &mut Matrix<T>,
+    y: &mut Matrix<T>,
+    angle_in_degrees: bool,
+) -> Result<()>
+where
+    T: DataType + ToPrimitive + FromPrimitive + Default + Copy + Send + Sync + 'static,
+{
+    if !mag.dims_match(ang) {
+        return Err(PureCvError::InvalidDimensions(
+            "magnitude and angle must have the same dimensions".to_string(),
+        ));
+    }
+
+    x.create(mag.rows, mag.cols, mag.channels);
+    y.create(mag.rows, mag.cols, mag.channels);
+
+    #[cfg(feature = "parallel")]
+    {
+        x.data
+            .par_iter_mut()
+            .zip(y.data.par_iter_mut())
+            .zip(mag.data.par_iter())
+            .zip(ang.data.par_iter())
+            .for_each(|(((xv, yv), &mv), &av)| {
+                let mf = mv.to_f64().unwrap_or(0.0);
+                let mut af = av.to_f64().unwrap_or(0.0);
+                if angle_in_degrees {
+                    af = af.to_radians();
+                }
+                *xv = T::from_f64(mf * af.cos()).unwrap_or_default();
+                *yv = T::from_f64(mf * af.sin()).unwrap_or_default();
+            });
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        x.data
+            .iter_mut()
+            .zip(y.data.iter_mut())
+            .zip(mag.data.iter())
+            .zip(ang.data.iter())
+            .for_each(|(((xv, yv), &mv), &av)| {
+                let mf = mv.to_f64().unwrap_or(0.0);
+                let mut af = av.to_f64().unwrap_or(0.0);
+                if angle_in_degrees {
+                    af = af.to_radians();
+                }
+                *xv = T::from_f64(mf * af.cos()).unwrap_or_default();
+                *yv = T::from_f64(mf * af.sin()).unwrap_or_default();
+            });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1132,5 +2368,125 @@ mod tests {
         assert!((inv_a.data[1] - (-0.7)).abs() < 1e-10);
         assert!((inv_a.data[2] - (-0.2)).abs() < 1e-10);
         assert!((inv_a.data[3] - 0.4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_magnitude() {
+        let mut x = Matrix::<f64>::new(1, 4, 1);
+        let mut y = Matrix::<f64>::new(1, 4, 1);
+        x.as_mut_slice().copy_from_slice(&[3.0, 0.0, 1.0, 5.0]);
+        y.as_mut_slice().copy_from_slice(&[4.0, 3.0, 1.0, 12.0]);
+        let mut mag = Matrix::<f64>::new(0, 0, 0);
+        magnitude(&x, &y, &mut mag).unwrap();
+        let expected = [5.0, 3.0, 2.0f64.sqrt(), 13.0];
+        for (i, &v) in mag.as_slice().iter().enumerate() {
+            assert!((v - expected[i]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_phase() {
+        let mut x = Matrix::<f64>::new(1, 4, 1);
+        let mut y = Matrix::<f64>::new(1, 4, 1);
+        x.as_mut_slice().copy_from_slice(&[1.0, 0.0, -1.0, 0.0]);
+        y.as_mut_slice().copy_from_slice(&[0.0, 1.0, 0.0, -1.0]);
+        let mut ph = Matrix::<f64>::new(0, 0, 0);
+        phase(&x, &y, &mut ph, true).unwrap();
+        let expected = [0.0, 90.0, 180.0, 270.0];
+        for (i, &v) in ph.as_slice().iter().enumerate() {
+            assert!((v - expected[i]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_cart_polar_roundtrip() {
+        let mut x = Matrix::<f64>::new(1, 4, 1);
+        let mut y = Matrix::<f64>::new(1, 4, 1);
+        x.as_mut_slice().copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
+        y.as_mut_slice().copy_from_slice(&[4.0, 3.0, 2.0, 1.0]);
+
+        let mut mag = Matrix::<f64>::new(0, 0, 0);
+        let mut ang = Matrix::<f64>::new(0, 0, 0);
+        cart_to_polar(&x, &y, &mut mag, &mut ang, true).unwrap();
+
+        let mut x2 = Matrix::<f64>::new(0, 0, 0);
+        let mut y2 = Matrix::<f64>::new(0, 0, 0);
+        polar_to_cart(&mag, &ang, &mut x2, &mut y2, true).unwrap();
+
+        for (i, &v) in x.as_slice().iter().enumerate() {
+            assert!((v - x2.as_slice()[i]).abs() < 1e-6);
+            assert!((y.as_slice()[i] - y2.as_slice()[i]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_min_max() {
+        let mut src1 = Matrix::<f32>::new(1, 4, 1);
+        let mut src2 = Matrix::<f32>::new(1, 4, 1);
+        src1.data = vec![1.0, 5.0, 3.0, 7.0];
+        src2.data = vec![2.0, 4.0, 6.0, 1.0];
+
+        let min_res = min(&src1, &src2).unwrap();
+        assert_eq!(min_res.data, vec![1.0, 4.0, 3.0, 1.0]);
+
+        let max_res = max(&src1, &src2).unwrap();
+        assert_eq!(max_res.data, vec![2.0, 5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn test_reduce() {
+        let mut src = Matrix::<f32>::new(2, 2, 1);
+        src.data = vec![1.0, 2.0, 3.0, 4.0];
+
+        // Reduce to row (dim=0)
+        let dst_sum = reduce(&src, 0, ReduceTypes::Sum).unwrap();
+        assert_eq!(dst_sum.rows, 1);
+        assert_eq!(dst_sum.cols, 2);
+        assert_eq!(dst_sum.data, vec![4.0, 6.0]);
+
+        let dst_avg = reduce(&src, 0, ReduceTypes::Avg).unwrap();
+        assert_eq!(dst_avg.data, vec![2.0, 3.0]);
+
+        let dst_min = reduce(&src, 0, ReduceTypes::Min).unwrap();
+        assert_eq!(dst_min.data, vec![1.0, 2.0]);
+
+        let dst_max = reduce(&src, 0, ReduceTypes::Max).unwrap();
+        assert_eq!(dst_max.data, vec![3.0, 4.0]);
+
+        // Reduce to column (dim=1)
+        let dst_col_sum = reduce(&src, 1, ReduceTypes::Sum).unwrap();
+        assert_eq!(dst_col_sum.rows, 2);
+        assert_eq!(dst_col_sum.cols, 1);
+        assert_eq!(dst_col_sum.data, vec![3.0, 7.0]);
+    }
+    #[test]
+    fn test_in_range() {
+        let mut src = Matrix::<u8>::new(1, 3, 3); // 1x3 3-channel
+                                                  // Pixel 0: (10, 20, 30) - In range
+                                                  // Pixel 1: (5, 20, 30)  - Out of range (ch 0 low)
+                                                  // Pixel 2: (100, 100, 100) - Out of range (high)
+        src.data = vec![10, 20, 30, 5, 20, 30, 100, 100, 100];
+
+        let mut lower = Matrix::<u8>::new(1, 3, 3);
+        lower.data = vec![10, 10, 10, 10, 10, 10, 10, 10, 10];
+
+        let mut upper = Matrix::<u8>::new(1, 3, 3);
+        upper.data = vec![50, 50, 50, 50, 50, 50, 50, 50, 50];
+
+        let mut mask = Matrix::<u8>::new(0, 0, 0);
+        in_range(&src, &lower, &upper, &mut mask).unwrap();
+        assert_eq!(mask.channels, 1);
+        assert_eq!(mask.data, vec![255, 0, 0]);
+    }
+
+    #[test]
+    fn test_in_range_scalar() {
+        let mut src = Matrix::<u8>::new(1, 3, 3);
+        src.data = vec![10, 20, 30, 5, 20, 30, 100, 100, 100];
+
+        let mut mask = Matrix::<u8>::new(0, 0, 0);
+        in_range_scalar(&src, &[10, 10, 10], &[50, 50, 50], &mut mask).unwrap();
+        assert_eq!(mask.channels, 1);
+        assert_eq!(mask.data, vec![255, 0, 0]);
     }
 }

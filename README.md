@@ -18,16 +18,22 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 ## ✨ Features
 
 ### `purecv-core`
-- **Matrix Operations:** Multi-dimensional `Matrix<T>` with support for common arithmetic (`add`, `sub`, `mul`, `div`) and bitwise logic.
+- **Matrix Operations:** Multi-dimensional `Matrix<T>` with support for common arithmetic (`add`, `subtract`, `multiply`, `divide`) and bitwise logic (`bitwise_and`, `bitwise_or`, `bitwise_xor`, `bitwise_not`). Matrix and scalar variants for all operations.
 - **Factory Methods:** Intuitive initialization with `zeros`, `ones`, `eye`, and `diag`.
-- **Structural:** `flip`, `rotate`, `transpose`, `repeat`, `reshape`, `hconcat`, `vconcat`.
-- **Math & Stats:** `sqrt`, `exp`, `log`, `pow`, `sum`, `mean`, `minMaxLoc`, `norm`.
-- **Channel Management:** `split`, `merge`, `mixChannels`.
+- **Comparison:** `compare`, `compare_scalar`, `min`, `max`, `abs_diff`, `in_range`.
+- **Structural:** `flip`, `rotate`, `transpose`, `repeat`, `reshape`, `hconcat`, `vconcat`, `copy_make_border`, `extract_channel`, `insert_channel`.
+- **Math:** `sqrt`, `exp`, `log`, `pow`, `magnitude`, `phase`, `cart_to_polar`, `polar_to_cart`, `convert_scale_abs`.
+- **Stats:** `sum`, `mean`, `mean_std_dev`, `min_max_loc`, `norm`, `normalize`, `count_non_zero`, `reduce`.
+- **Linear Algebra:** `gemm`, `dot`, `cross`, `trace`, `determinant`, `invert`, `solve`, `set_identity`.
+- **Channel Management:** `split`, `merge`, `mix_channels`.
+- **Utilities:** `add_weighted`, `check_range`, `absdiff`.
 - **ndarray Interop:** Optional, zero-cost conversions to/from `ndarray::Array3` via the `ndarray` feature flag.
 
 ### `purecv-imgproc`
-- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, and more.
-- **Filtering:** (In Progress) Fast convolutions and image filters.
+- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more.
+- **Filtering:** `blur`, `box_filter`, `gaussian_blur`, `median_blur`, `bilateral_filter`.
+- **Edge Detection:** `canny`, `sobel`, `scharr`, `laplacian`.
+- **Thresholding:** `threshold` with multiple threshold types.
 
 ## 🚀 Getting Started
 
@@ -37,7 +43,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-purecv = { git = "https://github.com/webarkit/purecv" }
+purecv = "0.1"
 ```
 
 ### Feature Flags
@@ -54,7 +60,7 @@ To enable the `ndarray` feature:
 
 ```toml
 [dependencies]
-purecv = { git = "https://github.com/webarkit/purecv", features = ["ndarray"] }
+purecv = { version = "0.1", features = ["ndarray"] }
 ```
 
 ### Usage Example
