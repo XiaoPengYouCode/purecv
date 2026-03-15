@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mat_rgb,
         Size::new(5, 5),
         purecv::core::Point::new(-1, -1),
-        BorderTypes::REFLECT_101,
+        BorderTypes::Reflect101,
     )?;
     save_matrix_rgb(&blurred, "examples/data/out/output_blur.png")?;
 
@@ -82,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Size::new(5, 5),
         1.5,
         1.5,
-        BorderTypes::REFLECT_101,
+        BorderTypes::Reflect101,
     )?;
     save_matrix_rgb(&g_blurred, "examples/data/out/output_gaussian_blur.png")?;
 
@@ -93,26 +93,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bilateral Filter
     println!("Applying Bilateral Filter...");
-    let b_filtered = bilateral_filter(&mat_rgb, 9, 75.0, 75.0, BorderTypes::REFLECT_101)?;
+    let b_filtered = bilateral_filter(&mat_rgb, 9, 75.0, 75.0, BorderTypes::Reflect101)?;
     save_matrix_rgb(&b_filtered, "examples/data/out/output_bilateral.png")?;
 
     // Sobel (on grayscale)
     println!("Applying Sobel...");
-    let sob_x = sobel(&mat_gray, 1, 0, 3, 1.0, 0.0, BorderTypes::REFLECT_101)?;
+    let sob_x = sobel(&mat_gray, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
     // Normalize for visualization
-    let sob_x_norm = normalize(&sob_x, 0.0, 255.0, NormTypes::MINMAX)?;
+    let mut sob_x_norm = Matrix::<u8>::new(sob_x.rows, sob_x.cols, sob_x.channels);
+    normalize(&sob_x, &mut sob_x_norm, 0.0, 255.0, NormTypes::MinMax, -1, None)?;
     save_matrix_gray(&sob_x_norm, "examples/data/out/output_sobel_x.png")?;
 
     // Scharr (on grayscale)
     println!("Applying Scharr...");
-    let sch_y = scharr(&mat_gray, 0, 1, 1.0, 0.0, BorderTypes::REFLECT_101)?;
-    let sch_y_norm = normalize(&sch_y, 0.0, 255.0, NormTypes::MINMAX)?;
+    let sch_y = scharr(&mat_gray, 0, 1, 1.0, 0.0, BorderTypes::Reflect101)?;
+    let mut sch_y_norm = Matrix::<u8>::new(sch_y.rows, sch_y.cols, sch_y.channels);
+    normalize(&sch_y, &mut sch_y_norm, 0.0, 255.0, NormTypes::MinMax, -1, None)?;
     save_matrix_gray(&sch_y_norm, "examples/data/out/output_scharr_y.png")?;
 
     // Laplacian (on grayscale)
     println!("Applying Laplacian...");
-    let lap = laplacian(&mat_gray, 3, 1.0, 0.0, BorderTypes::REFLECT_101)?;
-    let lap_norm = normalize(&lap, 0.0, 255.0, NormTypes::MINMAX)?;
+    let lap = laplacian(&mat_gray, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
+    let mut lap_norm = Matrix::<u8>::new(lap.rows, lap.cols, lap.channels);
+    normalize(&lap, &mut lap_norm, 0.0, 255.0, NormTypes::MinMax, -1, None)?;
     save_matrix_gray(&lap_norm, "examples/data/out/output_laplacian.png")?;
 
     // Canny (on grayscale)

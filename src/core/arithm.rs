@@ -1282,52 +1282,6 @@ where
     Ok(dst)
 }
 
-/// Flips a 2D matrix around vertical, horizontal, or both axes.
-///
-/// # Arguments
-///
-/// * `src` - Input matrix.
-/// * `flip_code` - A flag to specify how to flip the array:
-///     * `0` means flipping around the x-axis (vertical flip).
-///     * `>0` means flipping around the y-axis (horizontal flip).
-///     * `<0` means flipping around both axes (vertical and horizontal flip).
-///
-/// # Example
-///
-/// ```rust
-/// use purecv::core::{Matrix, flip};
-///
-/// let mat = Matrix::from_vec(2, 2, 1, vec![1, 2, 3, 4]);
-/// let flipped_h = flip(&mat, 1); // Horizontal flip
-/// // flipped_h.data should be [2, 1, 4, 3]
-/// ```
-pub fn flip<T>(src: &Matrix<T>, flip_code: i32) -> Matrix<T>
-where
-    T: Copy + Default + 'static,
-{
-    let mut dst = Matrix::<T>::new(src.rows, src.cols, src.channels);
-
-    for r in 0..src.rows {
-        for c in 0..src.cols {
-            for ch in 0..src.channels {
-                let mut new_r = r;
-                let mut new_c = c;
-
-                if flip_code == 0 || flip_code < 0 {
-                    // Vertical flip
-                    new_r = src.rows - 1 - r;
-                }
-                if flip_code > 0 || flip_code < 0 {
-                    // Horizontal flip
-                    new_c = src.cols - 1 - c;
-                }
-                dst.set(new_r, new_c, ch, *src.get(r, c, ch).unwrap_or(&T::default()));
-            }
-        }
-    }
-    dst
-}
-
 /// Calculates the natural logarithm of every matrix element.
 ///
 /// dst = log(src)
@@ -1380,42 +1334,6 @@ where
     Ok(dst)
 }
 
-/// Repeats the input matrix `ny` times vertically and `nx` times horizontally.
-///
-/// # Arguments
-///
-/// * `src` - Input matrix.
-/// * `ny` - Number of times to repeat the matrix vertically.
-/// * `nx` - Number of times to repeat the matrix horizontally.
-///
-/// # Example
-///
-/// ```rust
-/// use purecv::core::{Matrix, repeat};
-///
-/// let mat = Matrix::from_vec(1, 2, 1, vec![1, 2]);
-/// let repeated = repeat(&mat, 2, 2);
-/// // repeated.data should be [1, 2, 1, 2, 1, 2, 1, 2] (2x4 matrix)
-/// ```
-pub fn repeat<T>(src: &Matrix<T>, ny: i32, nx: i32) -> Matrix<T>
-where
-    T: Copy + Default + 'static,
-{
-    let new_rows = src.rows * ny as usize;
-    let new_cols = src.cols * nx as usize;
-    let mut dst = Matrix::<T>::new(new_rows, new_cols, src.channels);
-
-    for r in 0..new_rows {
-        for c in 0..new_cols {
-            for ch in 0..src.channels {
-                let src_r = r % src.rows;
-                let src_c = c % src.cols;
-                dst.set(r, c, ch, *src.get(src_r, src_c, ch).unwrap_or(&T::default()));
-            }
-        }
-    }
-    dst
-}
 
 /// Scales, calculates absolute values, and converts the result to 8-bit.
 ///
