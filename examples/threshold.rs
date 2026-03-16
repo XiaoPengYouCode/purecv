@@ -55,8 +55,7 @@ fn main() {
     print_matrix_u8(&binary);
 
     // 3. BINARY_INV threshold
-    let (_, binary_inv) =
-        threshold(&src, 127.0, 255.0, ThresholdTypes::THRESH_BINARY_INV).unwrap();
+    let (_, binary_inv) = threshold(&src, 127.0, 255.0, ThresholdTypes::THRESH_BINARY_INV).unwrap();
     println!("\nBINARY_INV:");
     print_matrix_u8(&binary_inv);
 
@@ -71,8 +70,7 @@ fn main() {
     print_matrix_u8(&tozero);
 
     // 6. TOZERO_INV threshold
-    let (_, tozero_inv) =
-        threshold(&src, 127.0, 255.0, ThresholdTypes::THRESH_TOZERO_INV).unwrap();
+    let (_, tozero_inv) = threshold(&src, 127.0, 255.0, ThresholdTypes::THRESH_TOZERO_INV).unwrap();
     println!("\nTOZERO_INV:");
     print_matrix_u8(&tozero_inv);
 
@@ -88,4 +86,3 @@ fn print_matrix_u8(m: &Matrix<u8>) {
         println!("  {:?}", row);
     }
 }
-

@@ -35,10 +35,10 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **SIMD Acceleration** (`simd` feature): Trait-based dispatch via `pulp` for `f32`, `f64`, and `u8` types. Accelerated operations include `add`, `sub`, `mul`, `div`, `min`, `max`, `sqrt`, `dot`, `sum`, `add_weighted`, `convert_scale_abs`, and `magnitude`. Falls back to scalar loops at zero cost when disabled.
 
 ### `purecv-imgproc`
-- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more. Up to **6.6× speedup** with Parallel + SIMD.
+- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more. Up to **6.6× speedup** with Parallel + SIMD. SIMD-accelerated paths (`simd` feature) use fixed-point integer arithmetic (coefficients 77/150/29 ≈ 0.299/0.587/0.114 × 256) for all `*_to_gray` conversions — portable to x86 SSE/AVX, ARM NEON, and WASM `simd128` via `pulp`.
 - **Filtering:** `blur`, `box_filter`, `gaussian_blur`, `median_blur`, `bilateral_filter`.
 - **Edge Detection:** `canny`, `sobel`, `scharr`, `laplacian`. Optimized `fast_deriv_3x3` kernel delivers up to **12× speedup** with Parallel.
-- **Thresholding:** `threshold` with multiple threshold types.
+- **Thresholding:** `threshold` with all 5 OpenCV-compatible types (`BINARY`, `BINARY_INV`, `TRUNC`, `TOZERO`, `TOZERO_INV`). SIMD-accelerated fast path for `u8`, `f32`, and `f64` via the `SimdElement::simd_threshold()` trait method. Works seamlessly with `parallel` feature for row-level Rayon dispatch.
 
 ## 🚀 Getting Started
 
@@ -129,6 +129,12 @@ cargo run --example structural_ops
 
 # Color conversion (RGB to Grayscale)
 cargo run --example color_conversion
+
+# Thresholding — all 5 types (BINARY, BINARY_INV, TRUNC, TOZERO, TOZERO_INV)
+cargo run --example threshold
+
+# Image filters (blur, gaussian, canny, sobel, …) — requires examples/data/butterfly.jpg
+cargo run --example filters
 ```
 
 ## 🧪 Testing & Benchmarking
@@ -175,8 +181,12 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
 
 - [x] **Phase 1: Core Foundation** - Matrix types, arithmetic, geometric utilities, and basic structural transforms.
 - [x] **Phase 2: Performance** - SIMD acceleration via `pulp`, Rayon parallelism, and Criterion benchmarking across 32 operations.
-- [ ] **Phase 3: WebAssembly** - Specialized wrappers and multi-threading for the web.
+  - [x] PR 1 — SIMD infra + `arithm` kernels (`add`, `sub`, `mul`, `div`, `dot`, `magnitude`, `add_weighted`, `convert_scale_abs`, `sqrt`, `min`, `max`, `sum`).
+  - [x] PR 2 — Color + Threshold SIMD: fixed-point `cvt_color_*_to_gray` kernels, `simd_threshold()` for all 5 types on `u8`/`f32`/`f64`, new `threshold` example.
+  - [ ] PR 3 — Phase 2 derivatives: bitwise, normalize, `fast_deriv_3x3` interior SIMD pass.
+- [ ] **Phase 3: WebAssembly** - `wasm-bindgen` wrappers, `wasm-pack` build, CI matrix with `wasm32-unknown-unknown` + `simd128`.
 - [ ] **Phase 4: Image Processing** - Advanced filtering, convolutions, and feature detection.
+- [ ] **Visual examples** — Load real images, apply `threshold` + `cvt_color`, save PNG output (follow-up to `filters.rs`).
 
 ## 📄 License
 
