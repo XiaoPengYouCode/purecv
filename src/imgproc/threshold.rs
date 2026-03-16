@@ -35,6 +35,7 @@
  */
 
 use crate::core::error::{PureCvError, Result};
+use crate::core::simd::SimdElement;
 use crate::core::Matrix;
 use num_traits::{FromPrimitive, NumCast, ToPrimitive};
 
@@ -80,7 +81,16 @@ pub fn threshold<T>(
     threshold_type: ThresholdTypes,
 ) -> Result<(f64, Matrix<T>)>
 where
-    T: Default + Clone + Copy + PartialOrd + ToPrimitive + FromPrimitive + NumCast + Send + Sync,
+    T: Default
+        + Clone
+        + Copy
+        + PartialOrd
+        + ToPrimitive
+        + FromPrimitive
+        + NumCast
+        + Send
+        + Sync
+        + SimdElement,
 {
     let rows = src.rows;
     let cols = src.cols;
@@ -102,6 +112,34 @@ where
     }
 
     let type_val = threshold_type as i32 & 0x7; // Get the base type (0-4)
+
+    // SIMD fast path: process entire buffer when the type supports it.
+    #[cfg(feature = "simd")]
+    {
+        if T::has_simd() && (0..=4).contains(&type_val) {
+            #[cfg(feature = "parallel")]
+            {
+                let row_len = cols * channels;
+                dst.data
+                    .par_chunks_exact_mut(row_len)
+                    .zip(src.data.par_chunks_exact(row_len))
+                    .for_each(|(dst_row, src_row)| {
+                        T::simd_threshold(dst_row, src_row, actual_thresh, maxval, type_val as u8);
+                    });
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                T::simd_threshold(
+                    &mut dst.data,
+                    &src.data,
+                    actual_thresh,
+                    maxval,
+                    type_val as u8,
+                );
+            }
+            return Ok((actual_thresh, dst));
+        }
+    }
 
     #[cfg(feature = "parallel")]
     {

@@ -132,6 +132,23 @@ pub trait SimdElement: Copy + Send + Sync + 'static {
     fn simd_magnitude(_dst: &mut [Self], _x: &[Self], _y: &[Self]) -> bool {
         false
     }
+
+    /// Apply threshold operation on a flat slice.
+    ///
+    /// `thresh_type` values: 0 = BINARY, 1 = BINARY_INV, 2 = TRUNC,
+    /// 3 = TOZERO, 4 = TOZERO_INV.
+    ///
+    /// Returns `true` if the operation was handled by SIMD, `false` to
+    /// fall back to the scalar loop.
+    fn simd_threshold(
+        _dst: &mut [Self],
+        _src: &[Self],
+        _thresh: f64,
+        _maxval: f64,
+        _thresh_type: u8,
+    ) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +335,50 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh as f32;
+            let m = maxval as f32;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0.0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0.0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -469,6 +530,50 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh;
+            let m = maxval;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0.0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0.0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -527,6 +632,50 @@ mod simd_impls {
                 acc += v as u64;
             }
             Some(acc as f64)
+        }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh.clamp(0.0, 255.0) as u8;
+            let m = maxval.clamp(0.0, 255.0) as u8;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
         }
     }
 }
@@ -597,19 +746,6 @@ pub(crate) fn simd_bgra_to_gray_u8(gray_data: &mut [u8], bgra_data: &[u8]) {
             let g = inp[1] as u16;
             let r = inp[2] as u16;
             *out = ((r * 77 + g * 150 + b * 29 + 128) >> 8) as u8;
-        }
-    });
-}
-
-/// Applies binary threshold to u8 data using SIMD.
-/// `src` and `dst` must have equal length.
-#[cfg(feature = "simd")]
-pub(crate) fn simd_threshold_binary_u8(dst: &mut [u8], src: &[u8], thresh: u8, maxval: u8) {
-    debug_assert_eq!(dst.len(), src.len());
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        for i in 0..dst.len() {
-            dst[i] = if src[i] > thresh { maxval } else { 0 };
         }
     });
 }
@@ -756,11 +892,66 @@ mod tests {
         }
 
         #[test]
-        fn test_simd_threshold_binary() {
+        fn test_simd_threshold_binary_u8() {
             let src = vec![10u8, 100, 128, 200, 255, 50];
             let mut dst = vec![0u8; 6];
-            simd_threshold_binary_u8(&mut dst, &src, 127, 255);
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 0));
             assert_eq!(dst, vec![0, 0, 255, 255, 255, 0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_binary_inv_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 1));
+            assert_eq!(dst, vec![255, 255, 0, 0, 0, 255]);
+        }
+
+        #[test]
+        fn test_simd_threshold_trunc_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 2));
+            assert_eq!(dst, vec![10, 100, 127, 127, 127, 50]);
+        }
+
+        #[test]
+        fn test_simd_threshold_tozero_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 3));
+            assert_eq!(dst, vec![0, 0, 128, 200, 255, 0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_tozero_inv_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 4));
+            assert_eq!(dst, vec![10, 100, 0, 0, 0, 50]);
+        }
+
+        #[test]
+        fn test_simd_threshold_binary_f32() {
+            let src = vec![0.1f32, 0.4, 0.5, 0.6, 0.9, 0.3];
+            let mut dst = vec![0.0f32; 6];
+            assert!(f32::simd_threshold(&mut dst, &src, 0.5, 1.0, 0));
+            assert_eq!(dst, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_trunc_f32() {
+            let src = vec![0.1f32, 0.4, 0.6, 0.9];
+            let mut dst = vec![0.0f32; 4];
+            assert!(f32::simd_threshold(&mut dst, &src, 0.5, 1.0, 2));
+            assert_eq!(dst, vec![0.1, 0.4, 0.5, 0.5]);
+        }
+
+        #[test]
+        fn test_simd_threshold_invalid_type() {
+            let src = vec![10u8; 4];
+            let mut dst = vec![0u8; 4];
+            assert!(!u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 5));
         }
 
         #[test]

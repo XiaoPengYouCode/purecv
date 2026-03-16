@@ -206,13 +206,23 @@ mod tests {
 
         let gray = cvt_color(&rgb_src, ColorConversionCode::COLOR_RGB2GRAY).unwrap();
 
-        // 0.299 * 255 = 76.245 -> 76
-        assert_eq!(*gray.at(0, 0, 0).unwrap(), 76);
-        // 0.587 * 255 = 149.685 -> 150
-        assert_eq!(*gray.at(0, 1, 0).unwrap(), 150);
-        // 0.114 * 255 = 29.07 -> 29
-        assert_eq!(*gray.at(1, 0, 0).unwrap(), 29);
-        // 0
+        // Allow ±1 tolerance: SIMD fixed-point (77/150/29) and scalar float
+        // (0.299/0.587/0.114) differ by at most 1 LSB.
+        assert!(
+            (*gray.at(0, 0, 0).unwrap() as i16 - 76).abs() <= 1,
+            "Red expected ~76, got {}",
+            *gray.at(0, 0, 0).unwrap()
+        );
+        assert!(
+            (*gray.at(0, 1, 0).unwrap() as i16 - 150).abs() <= 1,
+            "Green expected ~150, got {}",
+            *gray.at(0, 1, 0).unwrap()
+        );
+        assert!(
+            (*gray.at(1, 0, 0).unwrap() as i16 - 29).abs() <= 1,
+            "Blue expected ~29, got {}",
+            *gray.at(1, 0, 0).unwrap()
+        );
         assert_eq!(*gray.at(1, 1, 0).unwrap(), 0);
 
         let mut bgr_data = vec![0u8; 12];
@@ -222,13 +232,21 @@ mod tests {
         let bgr_src = Matrix::from_vec(2, 2, 3, bgr_data);
 
         let gray_bgr = cvt_color(&bgr_src, ColorConversionCode::COLOR_BGR2GRAY).unwrap();
-        // 0.114 * 255 = 29.07 -> 29 (Blue)
-        assert_eq!(*gray_bgr.at(0, 0, 0).unwrap(), 29);
-        // 0.587 * 255 = 149.685 -> 150 (Green)
-        assert_eq!(*gray_bgr.at(0, 1, 0).unwrap(), 150);
-        // 0.299 * 255 = 76.245 -> 76 (Red)
-        assert_eq!(*gray_bgr.at(1, 0, 0).unwrap(), 76);
-        // 0
+        assert!(
+            (*gray_bgr.at(0, 0, 0).unwrap() as i16 - 29).abs() <= 1,
+            "Blue expected ~29, got {}",
+            *gray_bgr.at(0, 0, 0).unwrap()
+        );
+        assert!(
+            (*gray_bgr.at(0, 1, 0).unwrap() as i16 - 150).abs() <= 1,
+            "Green expected ~150, got {}",
+            *gray_bgr.at(0, 1, 0).unwrap()
+        );
+        assert!(
+            (*gray_bgr.at(1, 0, 0).unwrap() as i16 - 76).abs() <= 1,
+            "Red expected ~76, got {}",
+            *gray_bgr.at(1, 0, 0).unwrap()
+        );
         assert_eq!(*gray_bgr.at(1, 1, 0).unwrap(), 0);
     }
 
@@ -258,5 +276,157 @@ mod tests {
         let (_, res_zero_inv) =
             threshold(&src, 127.0, 255.0, ThresholdTypes::THRESH_TOZERO_INV).unwrap();
         assert_eq!(res_zero_inv.data, vec![10, 50, 100, 0, 0, 0]);
+    }
+
+    // -------------------------------------------------------------------
+    //  Color conversion: larger-image equivalence tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_cvt_color_rgb_to_gray_large() {
+        // 64×64 RGB image with gradient pattern
+        let rows = 64;
+        let cols = 64;
+        let mut data = vec![0u8; rows * cols * 3];
+        for i in 0..rows * cols {
+            data[i * 3] = (i % 256) as u8; // R
+            data[i * 3 + 1] = ((i * 3) % 256) as u8; // G
+            data[i * 3 + 2] = ((i * 7) % 256) as u8; // B
+        }
+        let src = Matrix::from_vec(rows, cols, 3, data.clone());
+        let gray = cvt_color(&src, ColorConversionCode::COLOR_RGB2GRAY).unwrap();
+
+        assert_eq!(gray.rows, rows);
+        assert_eq!(gray.cols, cols);
+        assert_eq!(gray.channels, 1);
+
+        // Verify every pixel is within ±1 of the float formula
+        for i in 0..rows * cols {
+            let r = data[i * 3] as f32;
+            let g = data[i * 3 + 1] as f32;
+            let b = data[i * 3 + 2] as f32;
+            let expected = (0.299 * r + 0.587 * g + 0.114 * b).round() as i16;
+            let actual = gray.data[i] as i16;
+            assert!(
+                (expected - actual).abs() <= 1,
+                "Pixel {i}: expected ~{expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cvt_color_bgr_to_gray_large() {
+        let rows = 64;
+        let cols = 64;
+        let mut data = vec![0u8; rows * cols * 3];
+        for i in 0..rows * cols {
+            data[i * 3] = ((i * 7) % 256) as u8; // B
+            data[i * 3 + 1] = ((i * 3) % 256) as u8; // G
+            data[i * 3 + 2] = (i % 256) as u8; // R
+        }
+        let src = Matrix::from_vec(rows, cols, 3, data.clone());
+        let gray = cvt_color(&src, ColorConversionCode::COLOR_BGR2GRAY).unwrap();
+
+        for i in 0..rows * cols {
+            let b = data[i * 3] as f32;
+            let g = data[i * 3 + 1] as f32;
+            let r = data[i * 3 + 2] as f32;
+            let expected = (0.299 * r + 0.587 * g + 0.114 * b).round() as i16;
+            let actual = gray.data[i] as i16;
+            assert!(
+                (expected - actual).abs() <= 1,
+                "Pixel {i}: expected ~{expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cvt_color_rgba_to_gray_large() {
+        let rows = 32;
+        let cols = 32;
+        let mut data = vec![0u8; rows * cols * 4];
+        for i in 0..rows * cols {
+            data[i * 4] = (i % 256) as u8; // R
+            data[i * 4 + 1] = ((i * 3) % 256) as u8; // G
+            data[i * 4 + 2] = ((i * 7) % 256) as u8; // B
+            data[i * 4 + 3] = 255; // A
+        }
+        let src = Matrix::from_vec(rows, cols, 4, data.clone());
+        let gray = cvt_color(&src, ColorConversionCode::COLOR_RGBA2GRAY).unwrap();
+
+        for i in 0..rows * cols {
+            let r = data[i * 4] as f32;
+            let g = data[i * 4 + 1] as f32;
+            let b = data[i * 4 + 2] as f32;
+            let expected = (0.299 * r + 0.587 * g + 0.114 * b).round() as i16;
+            let actual = gray.data[i] as i16;
+            assert!(
+                (expected - actual).abs() <= 1,
+                "Pixel {i}: expected ~{expected}, got {actual}"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    //  Threshold: all types equivalence tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_threshold_all_types_u8() {
+        // Larger input to exercise SIMD paths
+        let data: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        let src = Matrix::from_vec(1, 256, 1, data);
+
+        // BINARY
+        let (_, res) = threshold(&src, 127.0, 200.0, ThresholdTypes::THRESH_BINARY).unwrap();
+        for i in 0..256 {
+            let expected: u8 = if (i as u8) > 127 { 200 } else { 0 };
+            assert_eq!(res.data[i], expected, "BINARY mismatch at {i}");
+        }
+
+        // BINARY_INV
+        let (_, res) = threshold(&src, 127.0, 200.0, ThresholdTypes::THRESH_BINARY_INV).unwrap();
+        for i in 0..256 {
+            let expected: u8 = if (i as u8) > 127 { 0 } else { 200 };
+            assert_eq!(res.data[i], expected, "BINARY_INV mismatch at {i}");
+        }
+
+        // TRUNC
+        let (_, res) = threshold(&src, 127.0, 200.0, ThresholdTypes::THRESH_TRUNC).unwrap();
+        for i in 0..256 {
+            let expected: u8 = if (i as u8) > 127 { 127 } else { i as u8 };
+            assert_eq!(res.data[i], expected, "TRUNC mismatch at {i}");
+        }
+
+        // TOZERO
+        let (_, res) = threshold(&src, 127.0, 200.0, ThresholdTypes::THRESH_TOZERO).unwrap();
+        for i in 0..256 {
+            let expected: u8 = if (i as u8) > 127 { i as u8 } else { 0 };
+            assert_eq!(res.data[i], expected, "TOZERO mismatch at {i}");
+        }
+
+        // TOZERO_INV
+        let (_, res) = threshold(&src, 127.0, 200.0, ThresholdTypes::THRESH_TOZERO_INV).unwrap();
+        for i in 0..256 {
+            let expected: u8 = if (i as u8) > 127 { 0 } else { i as u8 };
+            assert_eq!(res.data[i], expected, "TOZERO_INV mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn test_threshold_f32() {
+        let data: Vec<f32> = (0..100).map(|i| i as f32 * 0.01).collect();
+        let src = Matrix::from_vec(1, 100, 1, data);
+
+        let (_, res) = threshold(&src, 0.5, 1.0, ThresholdTypes::THRESH_BINARY).unwrap();
+        for i in 0..100 {
+            let val = i as f32 * 0.01;
+            let expected: f32 = if val > 0.5 { 1.0 } else { 0.0 };
+            assert!(
+                (res.data[i] - expected).abs() < 1e-5,
+                "f32 BINARY mismatch at {i}: expected {expected}, got {}",
+                res.data[i]
+            );
+        }
     }
 }
