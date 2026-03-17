@@ -132,6 +132,53 @@ pub trait SimdElement: Copy + Send + Sync + 'static {
     fn simd_magnitude(_dst: &mut [Self], _x: &[Self], _y: &[Self]) -> bool {
         false
     }
+
+    /// dst = |a - b|  (absolute difference)
+    fn simd_absdiff(_dst: &mut [Self], _a: &[Self], _b: &[Self]) -> bool {
+        false
+    }
+
+    /// dst = a & b  (bitwise AND)
+    fn simd_bitwise_and(_dst: &mut [Self], _a: &[Self], _b: &[Self]) -> bool {
+        false
+    }
+
+    /// dst = a | b  (bitwise OR)
+    fn simd_bitwise_or(_dst: &mut [Self], _a: &[Self], _b: &[Self]) -> bool {
+        false
+    }
+
+    /// dst = a ^ b  (bitwise XOR)
+    fn simd_bitwise_xor(_dst: &mut [Self], _a: &[Self], _b: &[Self]) -> bool {
+        false
+    }
+
+    /// dst = !src  (bitwise NOT)
+    fn simd_bitwise_not(_dst: &mut [Self], _src: &[Self]) -> bool {
+        false
+    }
+
+    /// Compute L2 norm squared: sum(src[i]^2) as f64
+    fn simd_norm_l2_sq(_src: &[Self]) -> Option<f64> {
+        None
+    }
+
+    /// Apply threshold operation on a flat slice.
+    ///
+    /// `thresh_type` values: 0 = BINARY, 1 = BINARY_INV, 2 = TRUNC,
+    /// 3 = TOZERO, 4 = TOZERO_INV.
+    ///
+    /// Returns `true` if the operation was handled by SIMD, `false` to
+    /// fall back to the scalar loop.
+    fn simd_threshold(
+        _dst: &mut [Self],
+        _src: &[Self],
+        _thresh: f64,
+        _maxval: f64,
+        _thresh_type: u8,
+    ) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +365,68 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_absdiff(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = (a[i] - b[i]).abs();
+                }
+            });
+            true
+        }
+
+        fn simd_norm_l2_sq(src: &[Self]) -> Option<f64> {
+            let mut acc = 0.0f64;
+            for &v in src {
+                acc += v as f64 * v as f64;
+            }
+            Some(acc)
+        }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh as f32;
+            let m = maxval as f32;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0.0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0.0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -469,6 +578,68 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_absdiff(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = (a[i] - b[i]).abs();
+                }
+            });
+            true
+        }
+
+        fn simd_norm_l2_sq(src: &[Self]) -> Option<f64> {
+            let mut acc = 0.0f64;
+            for &v in src {
+                acc += v * v;
+            }
+            Some(acc)
+        }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh;
+            let m = maxval;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0.0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0.0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0.0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -527,6 +698,108 @@ mod simd_impls {
                 acc += v as u64;
             }
             Some(acc as f64)
+        }
+
+        fn simd_absdiff(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = a[i].abs_diff(b[i]);
+                }
+            });
+            true
+        }
+
+        fn simd_bitwise_and(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = a[i] & b[i];
+                }
+            });
+            true
+        }
+
+        fn simd_bitwise_or(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = a[i] | b[i];
+                }
+            });
+            true
+        }
+
+        fn simd_bitwise_xor(dst: &mut [Self], a: &[Self], b: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = a[i] ^ b[i];
+                }
+            });
+            true
+        }
+
+        fn simd_bitwise_not(dst: &mut [Self], src: &[Self]) -> bool {
+            let arch = Arch::new();
+            arch.dispatch(|| {
+                for i in 0..dst.len() {
+                    dst[i] = !src[i];
+                }
+            });
+            true
+        }
+
+        fn simd_norm_l2_sq(src: &[Self]) -> Option<f64> {
+            let mut acc = 0u64;
+            for &v in src {
+                acc += (v as u64) * (v as u64);
+            }
+            Some(acc as f64)
+        }
+
+        fn simd_threshold(
+            dst: &mut [Self],
+            src: &[Self],
+            thresh: f64,
+            maxval: f64,
+            thresh_type: u8,
+        ) -> bool {
+            if thresh_type > 4 {
+                return false;
+            }
+            let t = thresh.clamp(0.0, 255.0) as u8;
+            let m = maxval.clamp(0.0, 255.0) as u8;
+            let arch = Arch::new();
+            match thresh_type {
+                0 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { m } else { 0 };
+                    }
+                }),
+                1 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0 } else { m };
+                    }
+                }),
+                2 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { t } else { src[i] };
+                    }
+                }),
+                3 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { src[i] } else { 0 };
+                    }
+                }),
+                4 => arch.dispatch(|| {
+                    for i in 0..dst.len() {
+                        dst[i] = if src[i] > t { 0 } else { src[i] };
+                    }
+                }),
+                _ => return false,
+            }
+            true
         }
     }
 }
@@ -601,15 +874,71 @@ pub(crate) fn simd_bgra_to_gray_u8(gray_data: &mut [u8], bgra_data: &[u8]) {
     });
 }
 
-/// Applies binary threshold to u8 data using SIMD.
-/// `src` and `dst` must have equal length.
+// ---------------------------------------------------------------------------
+//  Standalone SIMD helpers for 3×3 derivative (interior rows)
+// ---------------------------------------------------------------------------
+
+/// Applies a pre-computed 3×3 kernel to a single-channel interior row of f32.
+///
+/// For each output pixel `x` in `[0, cols)`, reads from three source rows
+/// (`prev`, `curr`, `next`) at positions `x-1`, `x`, `x+1` and accumulates
+/// with the 9 kernel weights, then applies `scale` and `delta`.
+///
+/// `dst` must have length `cols * channels` (same as each source row).
+/// `prev`, `curr`, `next` are slices of length `(cols + 2) * channels` or more,
+/// where element `0` corresponds to column `-1` of the image.
+///
+/// This only processes the *interior* columns (1..cols-1 per channel); the
+/// caller is responsible for border pixels.
 #[cfg(feature = "simd")]
-pub(crate) fn simd_threshold_binary_u8(dst: &mut [u8], src: &[u8], thresh: u8, maxval: u8) {
-    debug_assert_eq!(dst.len(), src.len());
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn simd_deriv_3x3_row_f32(
+    dst: &mut [f32],
+    prev: &[f32],
+    curr: &[f32],
+    next: &[f32],
+    k2d: &[f64; 9],
+    channels: usize,
+    scale: f64,
+    delta: f64,
+) {
+    let cols_ch = dst.len(); // cols * channels
+    if cols_ch < 3 * channels {
+        return;
+    }
+
+    let k: [f32; 9] = [
+        (k2d[0] * scale) as f32,
+        (k2d[1] * scale) as f32,
+        (k2d[2] * scale) as f32,
+        (k2d[3] * scale) as f32,
+        (k2d[4] * scale) as f32,
+        (k2d[5] * scale) as f32,
+        (k2d[6] * scale) as f32,
+        (k2d[7] * scale) as f32,
+        (k2d[8] * scale) as f32,
+    ];
+    let d = delta as f32;
+
     let arch = pulp::Arch::new();
     arch.dispatch(|| {
-        for i in 0..dst.len() {
-            dst[i] = if src[i] > thresh { maxval } else { 0 };
+        // Process interior columns only: skip first and last `channels` elements
+        let start = channels;
+        let end = cols_ch - channels;
+        for i in start..end {
+            let xp = i - channels; // x-1
+            let xn = i + channels; // x+1
+            let val = prev[xp] * k[0]
+                + prev[i] * k[1]
+                + prev[xn] * k[2]
+                + curr[xp] * k[3]
+                + curr[i] * k[4]
+                + curr[xn] * k[5]
+                + next[xp] * k[6]
+                + next[i] * k[7]
+                + next[xn] * k[8]
+                + d;
+            dst[i] = val;
         }
     });
 }
@@ -756,11 +1085,66 @@ mod tests {
         }
 
         #[test]
-        fn test_simd_threshold_binary() {
+        fn test_simd_threshold_binary_u8() {
             let src = vec![10u8, 100, 128, 200, 255, 50];
             let mut dst = vec![0u8; 6];
-            simd_threshold_binary_u8(&mut dst, &src, 127, 255);
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 0));
             assert_eq!(dst, vec![0, 0, 255, 255, 255, 0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_binary_inv_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 1));
+            assert_eq!(dst, vec![255, 255, 0, 0, 0, 255]);
+        }
+
+        #[test]
+        fn test_simd_threshold_trunc_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 2));
+            assert_eq!(dst, vec![10, 100, 127, 127, 127, 50]);
+        }
+
+        #[test]
+        fn test_simd_threshold_tozero_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 3));
+            assert_eq!(dst, vec![0, 0, 128, 200, 255, 0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_tozero_inv_u8() {
+            let src = vec![10u8, 100, 128, 200, 255, 50];
+            let mut dst = vec![0u8; 6];
+            assert!(u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 4));
+            assert_eq!(dst, vec![10, 100, 0, 0, 0, 50]);
+        }
+
+        #[test]
+        fn test_simd_threshold_binary_f32() {
+            let src = vec![0.1f32, 0.4, 0.5, 0.6, 0.9, 0.3];
+            let mut dst = vec![0.0f32; 6];
+            assert!(f32::simd_threshold(&mut dst, &src, 0.5, 1.0, 0));
+            assert_eq!(dst, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+        }
+
+        #[test]
+        fn test_simd_threshold_trunc_f32() {
+            let src = vec![0.1f32, 0.4, 0.6, 0.9];
+            let mut dst = vec![0.0f32; 4];
+            assert!(f32::simd_threshold(&mut dst, &src, 0.5, 1.0, 2));
+            assert_eq!(dst, vec![0.1, 0.4, 0.5, 0.5]);
+        }
+
+        #[test]
+        fn test_simd_threshold_invalid_type() {
+            let src = vec![10u8; 4];
+            let mut dst = vec![0u8; 4];
+            assert!(!u8::simd_threshold(&mut dst, &src, 127.0, 255.0, 5));
         }
 
         #[test]
@@ -1083,6 +1467,135 @@ mod tests {
             assert!(
                 (expected - simd_result).abs() < 1e-10,
                 "u8 sum mismatch: expected {expected}, got {simd_result}"
+            );
+        }
+
+        // --- absdiff tests ---
+
+        #[test]
+        fn test_simd_absdiff_f32() {
+            let a = vec![10.0f32, 3.0, 5.0, 0.0];
+            let b = vec![3.0f32, 10.0, 5.0, 7.0];
+            let mut dst = vec![0.0f32; 4];
+            assert!(f32::simd_absdiff(&mut dst, &a, &b));
+            assert_eq!(dst, vec![7.0, 7.0, 0.0, 7.0]);
+        }
+
+        #[test]
+        fn test_simd_absdiff_f64() {
+            let a = vec![10.0f64, 3.0, 5.0, 0.0];
+            let b = vec![3.0f64, 10.0, 5.0, 7.0];
+            let mut dst = vec![0.0f64; 4];
+            assert!(f64::simd_absdiff(&mut dst, &a, &b));
+            assert_eq!(dst, vec![7.0, 7.0, 0.0, 7.0]);
+        }
+
+        #[test]
+        fn test_simd_absdiff_u8() {
+            let a = vec![200u8, 50, 100, 0];
+            let b = vec![100u8, 200, 100, 255];
+            let mut dst = vec![0u8; 4];
+            assert!(u8::simd_absdiff(&mut dst, &a, &b));
+            assert_eq!(dst, vec![100, 150, 0, 255]);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_absdiff_f32() {
+            let a: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.7 - 50.0).collect();
+            let b: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.3 + 20.0).collect();
+            let expected: Vec<f32> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| (x - y).abs())
+                .collect();
+            let mut simd_result = vec![0.0f32; 1024];
+            assert!(f32::simd_absdiff(&mut simd_result, &a, &b));
+            for (i, (&e, &s)) in expected.iter().zip(simd_result.iter()).enumerate() {
+                assert!(
+                    (e - s).abs() < 1e-5,
+                    "Absdiff mismatch at index {i}: expected {e}, got {s}"
+                );
+            }
+        }
+
+        // --- bitwise ops tests (u8) ---
+
+        #[test]
+        fn test_simd_bitwise_and_u8() {
+            let a = vec![0xFFu8, 0xAA, 0x0F, 0x00];
+            let b = vec![0x0Fu8, 0x55, 0x0F, 0xFF];
+            let mut dst = vec![0u8; 4];
+            assert!(u8::simd_bitwise_and(&mut dst, &a, &b));
+            assert_eq!(dst, vec![0x0F, 0x00, 0x0F, 0x00]);
+        }
+
+        #[test]
+        fn test_simd_bitwise_or_u8() {
+            let a = vec![0xF0u8, 0xAA, 0x0F, 0x00];
+            let b = vec![0x0Fu8, 0x55, 0x0F, 0xFF];
+            let mut dst = vec![0u8; 4];
+            assert!(u8::simd_bitwise_or(&mut dst, &a, &b));
+            assert_eq!(dst, vec![0xFF, 0xFF, 0x0F, 0xFF]);
+        }
+
+        #[test]
+        fn test_simd_bitwise_xor_u8() {
+            let a = vec![0xFFu8, 0xAA, 0x0F, 0x00];
+            let b = vec![0x0Fu8, 0xAA, 0xF0, 0xFF];
+            let mut dst = vec![0u8; 4];
+            assert!(u8::simd_bitwise_xor(&mut dst, &a, &b));
+            assert_eq!(dst, vec![0xF0, 0x00, 0xFF, 0xFF]);
+        }
+
+        #[test]
+        fn test_simd_bitwise_not_u8() {
+            let src = vec![0x00u8, 0xFF, 0xAA, 0x55];
+            let mut dst = vec![0u8; 4];
+            assert!(u8::simd_bitwise_not(&mut dst, &src));
+            assert_eq!(dst, vec![0xFF, 0x00, 0x55, 0xAA]);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_bitwise_and_u8() {
+            let a: Vec<u8> = (0..256).map(|i| i as u8).collect();
+            let b: Vec<u8> = (0..256).map(|i| (255 - i) as u8).collect();
+            let expected: Vec<u8> = a.iter().zip(b.iter()).map(|(&x, &y)| x & y).collect();
+            let mut simd_result = vec![0u8; 256];
+            assert!(u8::simd_bitwise_and(&mut simd_result, &a, &b));
+            assert_eq!(simd_result, expected);
+        }
+
+        // --- norm_l2_sq tests ---
+
+        #[test]
+        fn test_simd_norm_l2_sq_f32() {
+            let src = vec![3.0f32, 4.0];
+            let result = f32::simd_norm_l2_sq(&src).unwrap();
+            assert!((result - 25.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn test_simd_norm_l2_sq_f64() {
+            let src = vec![3.0f64, 4.0];
+            let result = f64::simd_norm_l2_sq(&src).unwrap();
+            assert!((result - 25.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn test_simd_norm_l2_sq_u8() {
+            let src = vec![3u8, 4];
+            let result = u8::simd_norm_l2_sq(&src).unwrap();
+            assert!((result - 25.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn test_simd_vs_scalar_norm_l2_sq_f32() {
+            let src: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.3 - 50.0).collect();
+            let expected: f64 = src.iter().map(|&v| (v as f64) * (v as f64)).sum();
+            let simd_result = f32::simd_norm_l2_sq(&src).unwrap();
+            assert!(
+                (expected - simd_result).abs() / expected.abs().max(1.0) < 1e-4,
+                "norm_l2_sq mismatch: expected {expected}, got {simd_result}"
             );
         }
     }

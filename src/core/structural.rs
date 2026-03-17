@@ -433,8 +433,8 @@ where
     #[cfg(not(feature = "parallel"))]
     {
         for i in 0..rows * cols {
-            for c in 0..channels {
-                dst.data[i * channels + c] = mv[c].data[i];
+            for (c, plane) in mv.iter().enumerate().take(channels) {
+                dst.data[i * channels + c] = plane.data[i];
             }
         }
     }

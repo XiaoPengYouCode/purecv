@@ -39,6 +39,7 @@ use crate::core::types::BorderTypes;
 use crate::core::utils::border_interpolate;
 use crate::core::{Matrix, Point2i, PureCvError, Size2i};
 use num_traits::{FromPrimitive, NumCast, ToPrimitive};
+use std::any::TypeId;
 use std::iter::Sum;
 
 #[cfg(not(feature = "parallel"))]
@@ -361,13 +362,29 @@ pub fn bilateral_filter<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + PartialOrd + Send + Sync + Copy + ToPrimitive + FromPrimitive + Sum,
+    T: Default
+        + Clone
+        + PartialOrd
+        + Send
+        + Sync
+        + Copy
+        + ToPrimitive
+        + FromPrimitive
+        + Sum
+        + 'static,
 {
     let rows = src.rows;
     let cols = src.cols;
     let channels = src.channels;
     let rows_i32 = rows as i32;
     let cols_i32 = cols as i32;
+
+    if channels > 16 {
+        return Err(PureCvError::InvalidInput(format!(
+            "bilateral_filter only supports up to 16 channels, got {}",
+            channels
+        )));
+    }
 
     let radius = if d <= 0 {
         (sigma_space * 1.5).round() as i32
@@ -380,47 +397,84 @@ where
     let color_coeff = -1.0 / (2.0 * sigma_color * sigma_color);
     let space_coeff = -1.0 / (2.0 * sigma_space * sigma_space);
 
+    // Precompute space weights
+    let ksize = (radius * 2 + 1) as usize;
+    let mut space_weight = vec![0.0f32; ksize * ksize];
+    for ky in -radius..=radius {
+        for kx in -radius..=radius {
+            let rs = (ky * ky + kx * kx) as f64;
+            space_weight[((ky + radius) * (radius * 2 + 1) + (kx + radius)) as usize] =
+                (rs * space_coeff).exp() as f32;
+        }
+    }
+
+    // Check if T is u8 for LUT optimization
+    let is_u8 = TypeId::of::<T>() == TypeId::of::<u8>();
+    let color_weight_lut = if is_u8 {
+        let mut lut = vec![0.0f32; 256];
+        for (i, val) in lut.iter_mut().enumerate() {
+            *val = ((i * i) as f64 * color_coeff).exp() as f32;
+        }
+        Some(lut)
+    } else {
+        None
+    };
+
     dst.data
         .par_chunks_mut(cols * channels)
         .enumerate()
         .for_each(|(y, row_data)| {
             let y_i32 = y as i32;
+            let mut center_vals = [0.0f64; 16];
+            let mut neighbor_vals = [0.0f64; 16];
+            let mut sums = [0.0f64; 16];
+
             for (x, pixel) in row_data.chunks_exact_mut(channels).enumerate() {
                 let x_i32 = x as i32;
 
-                let center_vals: Vec<f64> = (0..channels)
-                    .map(|c| {
-                        src.at(y as i32, x as i32, c)
-                            .map(|&v| v.to_f64().unwrap_or(0.0))
-                            .unwrap_or(0.0)
-                    })
-                    .collect();
+                for c in 0..channels {
+                    center_vals[c] = src
+                        .at(y_i32, x_i32, c)
+                        .and_then(|&v| v.to_f64())
+                        .unwrap_or(0.0);
+                    sums[c] = 0.0;
+                }
 
-                let mut sums = vec![0.0f64; channels];
                 let mut w_sum = 0.0f64;
 
                 for ky in -radius..=radius {
+                    let src_y = border_interpolate(y_i32 + ky, rows_i32, border_type);
                     for kx in -radius..=radius {
-                        let src_y = border_interpolate(y_i32 + ky, rows_i32, border_type);
                         let src_x = border_interpolate(x_i32 + kx, cols_i32, border_type);
 
-                        let mut color_dist_sq = 0.0f64;
-                        let mut neighbor_vals = vec![0.0f64; channels];
+                        let mut weight = space_weight
+                            [((ky + radius) * (radius * 2 + 1) + (kx + radius)) as usize]
+                            as f64;
 
-                        for c in 0..channels {
-                            let val = src
-                                .at(src_y, src_x, c)
-                                .map(|&v| v.to_f64().unwrap_or(0.0))
-                                .unwrap_or(0.0);
-                            neighbor_vals[c] = val;
-                            let diff = val - center_vals[c];
-                            color_dist_sq += diff * diff;
+                        if let Some(ref lut) = color_weight_lut {
+                            for c in 0..channels {
+                                let val = src
+                                    .at(src_y, src_x, c)
+                                    .and_then(|&v| v.to_f32())
+                                    .unwrap_or(0.0) as u8;
+                                let center = center_vals[c] as u8;
+                                let diff = val.abs_diff(center);
+                                weight *= lut[diff as usize] as f64;
+                                neighbor_vals[c] = val as f64;
+                            }
+                        } else {
+                            let mut color_dist_sq = 0.0f64;
+                            for c in 0..channels {
+                                let val = src
+                                    .at(src_y, src_x, c)
+                                    .and_then(|&v| v.to_f64())
+                                    .unwrap_or(0.0);
+                                neighbor_vals[c] = val;
+                                let diff = val - center_vals[c];
+                                color_dist_sq += diff * diff;
+                            }
+                            weight *= (color_dist_sq * color_coeff).exp();
                         }
-
-                        let space_dist_sq = (ky * ky + kx * kx) as f64;
-
-                        let weight =
-                            (color_dist_sq * color_coeff + space_dist_sq * space_coeff).exp();
 
                         for c in 0..channels {
                             sums[c] += neighbor_vals[c] * weight;

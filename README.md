@@ -35,10 +35,10 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **SIMD Acceleration** (`simd` feature): Trait-based dispatch via `pulp` for `f32`, `f64`, and `u8` types. Accelerated operations include `add`, `sub`, `mul`, `div`, `min`, `max`, `sqrt`, `dot`, `sum`, `add_weighted`, `convert_scale_abs`, and `magnitude`. Falls back to scalar loops at zero cost when disabled.
 
 ### `purecv-imgproc`
-- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more. Up to **6.6× speedup** with Parallel + SIMD.
-- **Filtering:** `blur`, `box_filter`, `gaussian_blur`, `median_blur`, `bilateral_filter`.
-- **Edge Detection:** `canny`, `sobel`, `scharr`, `laplacian`. Optimized `fast_deriv_3x3` kernel delivers up to **12× speedup** with Parallel.
-- **Thresholding:** `threshold` with multiple threshold types.
+- **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more. Up to **6.6× speedup** with Parallel + SIMD. SIMD-accelerated paths (`simd` feature) use fixed-point integer arithmetic (coefficients 77/150/29 ≈ 0.299/0.587/0.114 × 256) for all `*_to_gray` conversions — portable to x86 SSE/AVX, ARM NEON, and WASM `simd128` via `pulp`.
+- **Edge Detection:** `canny`, `sobel`, `scharr`, `laplacian`. Optimized `fast_deriv_3x3` kernel delivers up to **12× speedup** with Parallel. For `f32` inputs, the `pulp`-powered `simd_deriv_3x3_row_f32` interior kernel adds a further **1.5× boost**, reaching **22× total speedup** (28.59 ms → 1.28 ms) with Parallel + SIMD — the highest combined speedup in the project.
+- **Filtering:** `blur`, `box_filter`, `gaussian_blur`, `median_blur`, `bilateral_filter`. The bilateral filter achieves **7.1× speedup** with Parallel (1.43 s → 202 ms on 512×512); SIMD provides no additional gain due to the non-vectorizable per-pixel exponential weight computation.
+- **Thresholding:** `threshold` with all 5 OpenCV-compatible types (`BINARY`, `BINARY_INV`, `TRUNC`, `TOZERO`, `TOZERO_INV`). SIMD-accelerated fast path for `u8`, `f32`, and `f64` via the `SimdElement::simd_threshold()` trait method. Works seamlessly with `parallel` feature for row-level Rayon dispatch.
 
 ## 🚀 Getting Started
 
@@ -129,6 +129,12 @@ cargo run --example structural_ops
 
 # Color conversion (RGB to Grayscale)
 cargo run --example color_conversion
+
+# Thresholding — all 5 types (BINARY, BINARY_INV, TRUNC, TOZERO, TOZERO_INV)
+cargo run --example threshold
+
+# Image filters (blur, gaussian, canny, sobel, …) — requires examples/data/butterfly.jpg
+cargo run --example filters
 ```
 
 ## 🧪 Testing & Benchmarking
@@ -158,25 +164,34 @@ cargo bench --features parallel
 RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
 ```
 
-#### Key Performance Highlights (1024×1024 matrices)
+#### Key Performance Highlights (1024×1024 matrices, *updated 2026-03-17*)
 
 | Operation | Standard | Parallel + SIMD | Speedup |
 |-----------|----------|-----------------|---------|
 | `cvt_color_rgb2gray` | 2.66 ms | **404 µs** | 6.6× |
-| `sobel_3x3` | 22.79 ms | **1.87 ms** | 12× |
+| `sobel_3x3` (generic) | 22.79 ms | **1.87 ms** | 12× |
+| `sobel_3x3_f32_dx` ★ | 28.59 ms | **1.28 ms** | **22×** |
+| `sobel_3x3_f32_dy` ★ | 26.24 ms | **1.27 ms** | **21×** |
+| `bilateral_filter` (512×512) | 1.43 s | **202 ms** | 7.1× |
 | `laplacian_3x3` | 45.91 ms | **4.44 ms** | 10.4× |
 | `dot` | 997 µs | **157 µs** | 6.4× |
 | `gemm_256×256` | 15.71 ms | **4.40 ms** | 3.7× |
 | `canny` | 57.61 ms | **12.54 ms** | 4.6× |
 
+> ★ Uses non-zero sinusoidal data to exercise the `simd_deriv_3x3_row_f32` SIMD kernel. Best combined speedup in the project.
+>
 > Full results in [`benches/benchmark_results.md`](./benches/benchmark_results.md)
 
 ## 🗺 Roadmap
 
 - [x] **Phase 1: Core Foundation** - Matrix types, arithmetic, geometric utilities, and basic structural transforms.
 - [x] **Phase 2: Performance** - SIMD acceleration via `pulp`, Rayon parallelism, and Criterion benchmarking across 32 operations.
-- [ ] **Phase 3: WebAssembly** - Specialized wrappers and multi-threading for the web.
+  - [x] PR 1 — SIMD infra + `arithm` kernels (`add`, `sub`, `mul`, `div`, `dot`, `magnitude`, `add_weighted`, `convert_scale_abs`, `sqrt`, `min`, `max`, `sum`).
+  - [x] PR 2 — Color + Threshold SIMD: fixed-point `cvt_color_*_to_gray` kernels, `simd_threshold()` for all 5 types on `u8`/`f32`/`f64`, new `threshold` example.
+  - [x] PR 3 — Derivatives SIMD: `fast_deriv_3x3` interior SIMD pass (`simd_deriv_3x3_row_f32`) achieving **22× speedup** on `sobel_3x3_f32`; new benchmarks for `sobel_3x3_f32_dx/dy` and `bilateral_filter`.
+- [ ] **Phase 3: WebAssembly** - `wasm-bindgen` wrappers, `wasm-pack` build, CI matrix with `wasm32-unknown-unknown` + `simd128`.
 - [ ] **Phase 4: Image Processing** - Advanced filtering, convolutions, and feature detection.
+- [ ] **Visual examples** — Load real images, apply `threshold` + `cvt_color`, save PNG output (follow-up to `filters.rs`).
 
 ## 📄 License
 

@@ -37,8 +37,89 @@
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+#[cfg(feature = "simd")]
+use crate::core::simd::{
+    simd_bgr_to_gray_u8, simd_bgra_to_gray_u8, simd_rgb_to_gray_u8, simd_rgba_to_gray_u8,
+};
+
 // Assuming the Matrix<T> struct is in scope
 use crate::core::Matrix;
+
+// ---------------------------------------------------------------------------
+//  Row-level kernels — SIMD or scalar depending on feature flags
+// ---------------------------------------------------------------------------
+
+/// Process one row of RGB→gray conversion.
+#[inline(always)]
+fn rgb_to_gray_row(out_row: &mut [u8], in_row: &[u8]) {
+    #[cfg(feature = "simd")]
+    {
+        simd_rgb_to_gray_u8(out_row, in_row);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
+            let r = in_val[0] as f32;
+            let g = in_val[1] as f32;
+            let b = in_val[2] as f32;
+            *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
+        }
+    }
+}
+
+/// Process one row of BGR→gray conversion.
+#[inline(always)]
+fn bgr_to_gray_row(out_row: &mut [u8], in_row: &[u8]) {
+    #[cfg(feature = "simd")]
+    {
+        simd_bgr_to_gray_u8(out_row, in_row);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
+            let b = in_val[0] as f32;
+            let g = in_val[1] as f32;
+            let r = in_val[2] as f32;
+            *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
+        }
+    }
+}
+
+/// Process one row of RGBA→gray conversion (alpha ignored).
+#[inline(always)]
+fn rgba_to_gray_row(out_row: &mut [u8], in_row: &[u8]) {
+    #[cfg(feature = "simd")]
+    {
+        simd_rgba_to_gray_u8(out_row, in_row);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
+            let r = in_val[0] as f32;
+            let g = in_val[1] as f32;
+            let b = in_val[2] as f32;
+            *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
+        }
+    }
+}
+
+/// Process one row of BGRA→gray conversion (alpha ignored).
+#[inline(always)]
+fn bgra_to_gray_row(out_row: &mut [u8], in_row: &[u8]) {
+    #[cfg(feature = "simd")]
+    {
+        simd_bgra_to_gray_u8(out_row, in_row);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
+            let b = in_val[0] as f32;
+            let g = in_val[1] as f32;
+            let r = in_val[2] as f32;
+            *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
+        }
+    }
+}
 
 /// Color conversion codes for cvt_color.
 /// Mimics OpenCV's cv::ColorConversionCodes.
@@ -98,12 +179,7 @@ pub fn cvt_color_rgb_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static 
             .par_chunks_exact_mut(out_row_len)
             .zip(input.data.par_chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
-                    let r = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let b = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                rgb_to_gray_row(out_row, in_row);
             });
     }
 
@@ -114,12 +190,7 @@ pub fn cvt_color_rgb_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static 
             .chunks_exact_mut(out_row_len)
             .zip(input.data.chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
-                    let r = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let b = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                rgb_to_gray_row(out_row, in_row);
             });
     }
 
@@ -143,12 +214,7 @@ pub fn cvt_color_bgr_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static 
             .par_chunks_exact_mut(out_row_len)
             .zip(input.data.par_chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
-                    let b = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let r = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                bgr_to_gray_row(out_row, in_row);
             });
     }
 
@@ -159,12 +225,7 @@ pub fn cvt_color_bgr_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static 
             .chunks_exact_mut(out_row_len)
             .zip(input.data.chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(3)) {
-                    let b = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let r = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                bgr_to_gray_row(out_row, in_row);
             });
     }
 
@@ -188,12 +249,7 @@ pub fn cvt_color_rgba_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static
             .par_chunks_exact_mut(out_row_len)
             .zip(input.data.par_chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
-                    let r = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let b = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                rgba_to_gray_row(out_row, in_row);
             });
     }
 
@@ -204,12 +260,7 @@ pub fn cvt_color_rgba_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static
             .chunks_exact_mut(out_row_len)
             .zip(input.data.chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
-                    let r = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let b = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                rgba_to_gray_row(out_row, in_row);
             });
     }
 
@@ -233,12 +284,7 @@ pub fn cvt_color_bgra_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static
             .par_chunks_exact_mut(out_row_len)
             .zip(input.data.par_chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
-                    let b = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let r = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                bgra_to_gray_row(out_row, in_row);
             });
     }
 
@@ -249,12 +295,7 @@ pub fn cvt_color_bgra_to_gray(input: &Matrix<u8>) -> Result<Matrix<u8>, &'static
             .chunks_exact_mut(out_row_len)
             .zip(input.data.chunks_exact(in_row_len))
             .for_each(|(out_row, in_row)| {
-                for (out_pixel, in_val) in out_row.iter_mut().zip(in_row.chunks_exact(4)) {
-                    let b = in_val[0] as f32;
-                    let g = in_val[1] as f32;
-                    let r = in_val[2] as f32;
-                    *out_pixel = (0.299 * r + 0.587 * g + 0.114 * b).round() as u8;
-                }
+                bgra_to_gray_row(out_row, in_row);
             });
     }
 
