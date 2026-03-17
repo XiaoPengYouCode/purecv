@@ -39,7 +39,7 @@ use purecv::core::types::BorderTypes;
 use purecv::core::{Matrix, Point2i, Size2i};
 use purecv::imgproc::derivatives::{laplacian, scharr, sobel};
 use purecv::imgproc::edge::canny;
-use purecv::imgproc::filter::{box_filter, gaussian_blur};
+use purecv::imgproc::filter::{bilateral_filter, box_filter, gaussian_blur};
 use purecv::imgproc::threshold::{threshold, ThresholdTypes};
 use purecv::imgproc::{cvt_color, ColorConversionCode};
 
@@ -160,6 +160,21 @@ fn bench_imgproc(c: &mut Criterion) {
     // canny edge detection (u8 single-channel)
     c.bench_function("canny_1024x1024", |b| {
         b.iter(|| canny(black_box(&img_gray_u8), 50.0, 150.0, 3, false).unwrap())
+    });
+
+    // bilateral_filter
+    let img_512 = Matrix::<u8>::new(512, 512, 1);
+    c.bench_function("bilateral_filter_512x512_u8", |b| {
+        b.iter(|| {
+            bilateral_filter(
+                black_box(&img_512),
+                -1,
+                25.0,
+                10.0,
+                BorderTypes::default(),
+            )
+            .unwrap()
+        })
     });
 }
 
