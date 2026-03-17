@@ -102,7 +102,7 @@ pub fn sobel<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync,
+    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync + 'static,
 {
     if ksize != -1 && ksize % 2 == 0 {
         return Err(PureCvError::InvalidInput(
@@ -138,7 +138,7 @@ pub fn scharr<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync,
+    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync + 'static,
 {
     sobel(src, dx, dy, -1, scale, delta, border_type)
 }
@@ -152,7 +152,7 @@ pub fn laplacian<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync,
+    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync + 'static,
 {
     if ksize == 1 {
         // Discrete Laplacian kernel
@@ -303,7 +303,7 @@ fn fast_deriv_3x3<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync,
+    T: Default + Clone + ToPrimitive + FromPrimitive + NumCast + Copy + Send + Sync + 'static,
 {
     let rows = src.rows;
     let cols = src.cols;
@@ -321,6 +321,110 @@ where
         }
     }
 
+    // SIMD fast-path: when T is f32, convert source rows to f32 slices
+    // and use the SIMD 3x3 kernel for interior rows.
+    #[cfg(feature = "simd")]
+    {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() && rows > 2 && cols > 2 {
+            let row_len = cols * channels;
+
+            // Reinterpret src.data as &[f32] — safe because T == f32
+            let src_f32: &[f32] = unsafe {
+                std::slice::from_raw_parts(src.data.as_ptr() as *const f32, src.data.len())
+            };
+            let dst_f32: &mut [f32] = unsafe {
+                std::slice::from_raw_parts_mut(dst.data.as_mut_ptr() as *mut f32, dst.data.len())
+            };
+
+            // Process interior rows with SIMD
+            dst_f32
+                .par_chunks_mut(row_len)
+                .enumerate()
+                .for_each(|(y, dst_row)| {
+                    let y_i32 = y as i32;
+                    let is_y_inside = y_i32 >= 1 && y_i32 < rows_i32 - 1;
+
+                    if is_y_inside {
+                        let prev = &src_f32[(y - 1) * row_len..y * row_len];
+                        let curr = &src_f32[y * row_len..(y + 1) * row_len];
+                        let next = &src_f32[(y + 1) * row_len..(y + 2) * row_len];
+
+                        // Use SIMD for interior columns
+                        crate::core::simd::simd_deriv_3x3_row_f32(
+                            dst_row, prev, curr, next, &k2d, channels, scale, delta,
+                        );
+
+                        // Handle border columns (first and last) with scalar
+                        for x in [0usize, cols - 1] {
+                            let x_i32 = x as i32;
+                            for c in 0..channels {
+                                let idx = x * channels + c;
+                                let mut sum = 0.0f64;
+                                for ky_idx in 0..3i32 {
+                                    let src_y = border_interpolate(
+                                        y_i32 + ky_idx - 1,
+                                        rows_i32,
+                                        border_type,
+                                    );
+                                    if src_y >= 0 {
+                                        let y_off = (src_y as usize) * row_len + c;
+                                        for kx_idx in 0..3i32 {
+                                            let src_x = border_interpolate(
+                                                x_i32 + kx_idx - 1,
+                                                cols_i32,
+                                                border_type,
+                                            );
+                                            if src_x >= 0 {
+                                                sum += src_f32[y_off + (src_x as usize) * channels]
+                                                    as f64
+                                                    * k2d[(ky_idx * 3 + kx_idx) as usize];
+                                            }
+                                        }
+                                    }
+                                }
+                                dst_row[idx] = (sum * scale + delta) as f32;
+                            }
+                        }
+                    } else {
+                        // Border rows: full scalar fallback
+                        for (x, pixel) in dst_row.chunks_exact_mut(channels).enumerate() {
+                            let x_i32 = x as i32;
+                            for (c, comp) in pixel.iter_mut().enumerate() {
+                                let mut sum = 0.0f64;
+                                for ky_idx in 0..3i32 {
+                                    let src_y = border_interpolate(
+                                        y_i32 + ky_idx - 1,
+                                        rows_i32,
+                                        border_type,
+                                    );
+                                    if src_y >= 0 {
+                                        let y_off = (src_y as usize) * row_len + c;
+                                        for kx_idx in 0..3i32 {
+                                            let src_x = border_interpolate(
+                                                x_i32 + kx_idx - 1,
+                                                cols_i32,
+                                                border_type,
+                                            );
+                                            if src_x >= 0 {
+                                                sum += src_f32[y_off + (src_x as usize) * channels]
+                                                    as f64
+                                                    * k2d[(ky_idx * 3 + kx_idx) as usize];
+                                            }
+                                        }
+                                    }
+                                }
+                                *comp = (sum * scale + delta) as f32;
+                            }
+                        }
+                    }
+                });
+
+            // Reinterpret dst_f32 back to dst — already written in-place
+            return Ok(dst);
+        }
+    }
+
+    // Generic scalar fallback (all types)
     dst.data
         .par_chunks_mut(cols * channels)
         .enumerate()

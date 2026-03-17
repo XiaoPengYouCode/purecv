@@ -9,6 +9,46 @@ This document highlights the performance evaluation of the `purecv` library acro
 
 All tests operate on `1024x1024` image/matrix tensors using `f32` (or `u8` depending on the domain context). Times shown represent the median calculation calculated by `Criterion.rs`.
 
+
+*Execution Date: 2026-03-17 (CET)*
+---
+
+## New Benchmarks — bilateral_filter & sobel_f32 (SIMD path)
+
+Three new benchmarks were added to specifically evaluate the **SIMD fast-path** in `fast_deriv_3x3` for `f32` Sobel, and the heavy compute-bound `bilateral_filter`. Sobel f32 benchmarks use **realistic non-zero data** (sinusoidal gradient pattern) to fully exercise the computation.
+
+| Benchmark / Operation              | Standard    | SIMD Only    | Parallel       | Parallel + SIMD  |
+| :--------------------------------- | :---------- | :----------- | :------------- | :--------------- |
+| `bilateral_filter_512×512_u8`      | 1.43 s      | 1.51 s       | **202.44 ms**  | 205.48 ms        |
+| `sobel_3x3_f32_dx_1024×1024`       | 28.59 ms    | 6.26 ms      | 1.96 ms        | **1.28 ms**      |
+| `sobel_3x3_f32_dy_1024×1024`       | 26.24 ms    | 6.51 ms      | 2.16 ms        | **1.27 ms**      |
+
+### Analysis
+
+- **`sobel_3x3_f32` (dx/dy)** — first benchmark where **SIMD alone provides a massive standalone gain**:
+  - SIMD Only: **4.5× speedup** over Standard — the `simd_deriv_3x3_row_f32` kernel in `fast_deriv_3x3` processes interior rows with vectorized 3×3 convolutions.
+  - Parallel: **14× speedup** — row-wise parallelism scales excellently.
+  - **Parallel + SIMD: 22× total speedup** (28.59 ms → 1.28 ms) — the combination of SIMD kernels on each core produces the best result seen in the project.
+  - Compared to the generic `sobel_3x3` (which uses `Matrix<f32>` with zero data and mixed dx=1,dy=1), the f32-specific SIMD path is **~1.5× faster** even in Parallel+SIMD (1.28 ms vs 1.87 ms).
+
+- **`bilateral_filter_512×512_u8`** — heavily compute-bound (per-pixel Gaussian weight computation over a spatial/range neighborhood):
+  - Parallel: **7.1× speedup** (1.43 s → 202 ms) — each row's bilateral computation is independent.
+  - SIMD Only: **no gain** (1.51 s, slightly worse) — the complex per-pixel exponential weight math is not trivially vectorizable.
+  - Parallel + SIMD: equivalent to Parallel alone (~205 ms).
+
+### Key Differences vs Previous Results
+
+| Metric                            | Previous best (`sobel_3x3` generic) | New (`sobel_3x3_f32` SIMD path) | Improvement |
+| :-------------------------------- | :---------------------------------- | :------------------------------- | :---------- |
+| Standard                          | 22.79 ms                            | 28.59 ms (realistic data)        | —           |
+| SIMD Only                         | 21.66 ms                            | **6.26 ms**                      | **3.5×**    |
+| Parallel                          | 1.87 ms                             | **1.96 ms**                      | ~equal      |
+| Parallel + SIMD                   | 1.87 ms                             | **1.28 ms**                      | **1.5×**    |
+
+> The generic `sobel_3x3` benchmark used zero-initialized data and the mixed derivative (dx=1, dy=1), which masked the SIMD gains. With realistic f32 data and separate dx/dy, the `pulp`-powered SIMD kernel delivers a clear **1.5× additional speedup** on top of parallelism.
+
+---
+
 *Execution Date: 2026-03-09 23:43 (CET)*
 
 ## Performance Comparison Table
@@ -135,9 +175,11 @@ Following the initial SIMD and Parallelization benchmarks, targeted algorithmic 
 | Color conversion   | Parallel + SIMD   | 6.6× (vectorizable + parallel) |
 | Spatial filters    | Parallel          | 3× (row-parallel convolution) |
 | Derivatives        | Parallel          | 12× (optimized fast path)  |
+| Derivatives (f32 SIMD) | Parallel + SIMD | **22× (SIMD kernel + parallel)** |
+| Bilateral filter   | Parallel          | 7.1× (compute-bound, no SIMD gain) |
 | Canny edge detect  | Parallel + SIMD   | 4.6× (multi-stage pipeline)|
 | Structural ops     | Parallel          | 5× (independent row ops)   |
 | GEMM               | Parallel          | 3.7× (compute-bound)       |
 
-*Conclusion*: Parallelism (`rayon`) is the dominant optimization for nearly all operations. SIMD (`target-cpu=native`) provides meaningful additional gains primarily for **pixel-level math** (`cvt_color`, `convert_scale_abs`) where the inner loop is trivially vectorizable. For memory-bound or scatter/gather patterns, SIMD adds no benefit.
+*Conclusion*: Parallelism (`rayon`) is the dominant optimization for nearly all operations. SIMD (`target-cpu=native`) provides meaningful additional gains primarily for **pixel-level math** (`cvt_color`, `convert_scale_abs`) and **f32 derivative kernels** (`sobel_3x3_f32`) where the inner loop is trivially vectorizable. The `sobel_3x3_f32` SIMD path achieves the project's highest combined speedup at **22×**. For memory-bound or scatter/gather patterns, SIMD adds no benefit.
 

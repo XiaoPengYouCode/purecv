@@ -39,8 +39,8 @@ use crate::core::types::BorderTypes;
 use crate::core::utils::border_interpolate;
 use crate::core::{Matrix, Point2i, PureCvError, Size2i};
 use num_traits::{FromPrimitive, NumCast, ToPrimitive};
-use std::iter::Sum;
 use std::any::TypeId;
+use std::iter::Sum;
 
 #[cfg(not(feature = "parallel"))]
 use crate::core::utils::ParIterFallback;
@@ -362,7 +362,16 @@ pub fn bilateral_filter<T>(
     border_type: BorderTypes,
 ) -> Result<Matrix<T>>
 where
-    T: Default + Clone + PartialOrd + Send + Sync + Copy + ToPrimitive + FromPrimitive + Sum + 'static,
+    T: Default
+        + Clone
+        + PartialOrd
+        + Send
+        + Sync
+        + Copy
+        + ToPrimitive
+        + FromPrimitive
+        + Sum
+        + 'static,
 {
     let rows = src.rows;
     let cols = src.cols;
@@ -394,7 +403,7 @@ where
     for ky in -radius..=radius {
         for kx in -radius..=radius {
             let rs = (ky * ky + kx * kx) as f64;
-            space_weight[((ky + radius) * (radius as i32 * 2 + 1) + (kx + radius)) as usize] =
+            space_weight[((ky + radius) * (radius * 2 + 1) + (kx + radius)) as usize] =
                 (rs * space_coeff).exp() as f32;
         }
     }
@@ -403,8 +412,8 @@ where
     let is_u8 = TypeId::of::<T>() == TypeId::of::<u8>();
     let color_weight_lut = if is_u8 {
         let mut lut = vec![0.0f32; 256];
-        for i in 0..256 {
-            lut[i] = ((i * i) as f64 * color_coeff).exp() as f32;
+        for (i, val) in lut.iter_mut().enumerate() {
+            *val = ((i * i) as f64 * color_coeff).exp() as f32;
         }
         Some(lut)
     } else {
@@ -424,7 +433,10 @@ where
                 let x_i32 = x as i32;
 
                 for c in 0..channels {
-                    center_vals[c] = src.at(y_i32, x_i32, c).and_then(|&v| v.to_f64()).unwrap_or(0.0);
+                    center_vals[c] = src
+                        .at(y_i32, x_i32, c)
+                        .and_then(|&v| v.to_f64())
+                        .unwrap_or(0.0);
                     sums[c] = 0.0;
                 }
 
@@ -436,21 +448,27 @@ where
                         let src_x = border_interpolate(x_i32 + kx, cols_i32, border_type);
 
                         let mut weight = space_weight
-                            [((ky + radius) * (radius as i32 * 2 + 1) + (kx + radius)) as usize]
+                            [((ky + radius) * (radius * 2 + 1) + (kx + radius)) as usize]
                             as f64;
 
                         if let Some(ref lut) = color_weight_lut {
                             for c in 0..channels {
-                                let val = src.at(src_y, src_x, c).and_then(|&v| v.to_f32()).unwrap_or(0.0) as u8;
+                                let val = src
+                                    .at(src_y, src_x, c)
+                                    .and_then(|&v| v.to_f32())
+                                    .unwrap_or(0.0) as u8;
                                 let center = center_vals[c] as u8;
-                                let diff = if val > center { val - center } else { center - val };
+                                let diff = val.abs_diff(center);
                                 weight *= lut[diff as usize] as f64;
                                 neighbor_vals[c] = val as f64;
                             }
                         } else {
                             let mut color_dist_sq = 0.0f64;
                             for c in 0..channels {
-                                let val = src.at(src_y, src_x, c).and_then(|&v| v.to_f64()).unwrap_or(0.0);
+                                let val = src
+                                    .at(src_y, src_x, c)
+                                    .and_then(|&v| v.to_f64())
+                                    .unwrap_or(0.0);
                                 neighbor_vals[c] = val;
                                 let diff = val - center_vals[c];
                                 color_dist_sq += diff * diff;

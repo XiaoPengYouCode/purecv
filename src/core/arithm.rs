@@ -474,7 +474,7 @@ where
 /// dst = src1 & src2
 pub fn bitwise_and<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Copy + Send + Sync + BitAnd<Output = T> + Default + 'static,
+    T: Copy + Send + Sync + BitAnd<Output = T> + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -484,7 +484,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 & s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 & s2, simd: simd_bitwise_and);
 
     Ok(dst)
 }
@@ -494,7 +494,7 @@ where
 /// dst = src1 | src2
 pub fn bitwise_or<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Copy + Send + Sync + BitOr<Output = T> + Default + 'static,
+    T: Copy + Send + Sync + BitOr<Output = T> + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -504,7 +504,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 | s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 | s2, simd: simd_bitwise_or);
 
     Ok(dst)
 }
@@ -514,7 +514,7 @@ where
 /// dst = src1 ^ src2
 pub fn bitwise_xor<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Copy + Send + Sync + BitXor<Output = T> + Default + 'static,
+    T: Copy + Send + Sync + BitXor<Output = T> + Default + SimdElement + 'static,
 {
     if src1.rows != src2.rows || src1.cols != src2.cols || src1.channels != src2.channels {
         return Err(PureCvError::InvalidDimensions(
@@ -524,7 +524,7 @@ where
 
     let mut dst = Matrix::<T>::new(src1.rows, src1.cols, src1.channels);
 
-    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 ^ s2);
+    binary_op!(dst, src1, src2, T, T, |d, s1, s2| *d = s1 ^ s2, simd: simd_bitwise_xor);
 
     Ok(dst)
 }
@@ -564,11 +564,11 @@ where
 /// dst = ~src
 pub fn bitwise_not<T>(src: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Copy + Send + Sync + Not<Output = T> + Default + 'static,
+    T: Copy + Send + Sync + Not<Output = T> + Default + SimdElement + 'static,
 {
     let mut dst = Matrix::<T>::new(src.rows, src.cols, src.channels);
 
-    unary_op!(dst, src, T, T, |d, s| *d = !s);
+    unary_op!(dst, src, T, T, |d, s| *d = !s, simd: simd_bitwise_not);
 
     Ok(dst)
 }
@@ -616,7 +616,7 @@ where
 /// Calculates the per-element absolute difference between two matrices.
 pub fn abs_diff<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Default + SimdElement + 'static,
 {
     if !src1.dims_match(src2) {
         return Err(PureCvError::InvalidDimensions(
@@ -628,7 +628,7 @@ where
 
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
         *d = if s1 > s2 { s1 - s2 } else { s2 - s1 };
-    });
+    }, simd: simd_absdiff);
 
     Ok(dst)
 }
@@ -774,7 +774,7 @@ where
     }
     #[cfg(not(feature = "parallel"))]
     {
-        for i in 0..d.len() {
+        for (i, mask_val) in d.iter_mut().enumerate() {
             let offset = i * channels;
             let mut res = true;
             for c in 0..channels {
@@ -784,7 +784,7 @@ where
                     break;
                 }
             }
-            d[i] = if res { 255 } else { 0 };
+            *mask_val = if res { 255 } else { 0 };
         }
     }
     Ok(())
@@ -837,7 +837,7 @@ where
 
     #[cfg(not(feature = "parallel"))]
     {
-        for pixel_idx in 0..dst_data.len() {
+        for (pixel_idx, d) in dst_data.iter_mut().enumerate() {
             let offset = pixel_idx * channels;
             let mut res = true;
             for c in 0..channels {
@@ -849,7 +849,7 @@ where
                     break;
                 }
             }
-            dst_data[pixel_idx] = if res { 255 } else { 0 };
+            *d = if res { 255 } else { 0 };
         }
     }
 
@@ -861,7 +861,7 @@ where
 /// dst = |src1 - src2|
 pub fn absdiff<T>(src1: &Matrix<T>, src2: &Matrix<T>) -> Result<Matrix<T>>
 where
-    T: Num + Copy + Send + Sync + PartialOrd + Sub<Output = T> + Default + 'static,
+    T: Num + Copy + Send + Sync + PartialOrd + Sub<Output = T> + Default + SimdElement + 'static,
 {
     if !src1.dims_match(src2) {
         return Err(PureCvError::InvalidDimensions(
@@ -873,7 +873,7 @@ where
 
     binary_op!(dst, src1, src2, T, T, |d, s1, s2| {
         *d = if s1 > s2 { s1 - s2 } else { s2 - s1 };
-    });
+    }, simd: simd_absdiff);
 
     Ok(dst)
 }
@@ -883,8 +883,18 @@ where
 /// Returns a Scalar with the sum of each channel.
 pub fn sum<T>(src: &Matrix<T>) -> Scalar<f64>
 where
-    T: Num + ToPrimitive + Copy + Send + Sync + 'static,
+    T: Num + ToPrimitive + Copy + Send + Sync + SimdElement + 'static,
 {
+    // SIMD fast-path: single-channel and type supports SIMD
+    #[cfg(feature = "simd")]
+    {
+        if src.channels == 1 && T::has_simd() {
+            if let Some(s) = T::simd_sum(&src.data) {
+                return Scalar::new(s, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+
     #[cfg(feature = "parallel")]
     {
         let sums = src
@@ -915,7 +925,7 @@ where
     #[cfg(not(feature = "parallel"))]
     {
         let mut sums = [0.0f64; 4];
-        for pixel in src.data.chunks_exact(src.channels as usize) {
+        for pixel in src.data.chunks_exact(src.channels) {
             for (i, &val) in pixel.iter().enumerate() {
                 if i < 4 {
                     sums[i] += val.to_f64().unwrap_or(0.0);
@@ -931,7 +941,7 @@ where
 /// Returns a Scalar with the mean of each channel.
 pub fn mean<T>(src: &Matrix<T>) -> Scalar<f64>
 where
-    T: DataType + Num + ToPrimitive + Copy + Send + Sync + 'static,
+    T: DataType + Num + ToPrimitive + Copy + Send + Sync + SimdElement + 'static,
 {
     let s = sum(src);
     let total_pixels = (src.rows * src.cols) as f64;
@@ -946,7 +956,7 @@ where
 /// Calculates a mean and standard deviation of matrix elements.
 pub fn mean_std_dev<T>(src: &Matrix<T>) -> (Scalar<f64>, Scalar<f64>)
 where
-    T: DataType + Num + ToPrimitive + Copy + Send + Sync + 'static,
+    T: DataType + Num + ToPrimitive + Copy + Send + Sync + SimdElement + 'static,
 {
     let m = mean(src);
     let mut sq_sum = [0.0f64; 4];
@@ -976,7 +986,7 @@ where
 /// Returns the norm value as f64.
 pub fn norm<T>(src: &Matrix<T>, norm_type: NormTypes, mask: Option<&Matrix<u8>>) -> Result<f64>
 where
-    T: DataType + ToPrimitive + Default + Copy + Sync + Send,
+    T: DataType + ToPrimitive + Default + Copy + Sync + Send + SimdElement,
 {
     match norm_type {
         NormTypes::Inf => {
@@ -1056,6 +1066,16 @@ where
             }
         }
         NormTypes::L2 => {
+            // SIMD fast-path for L2 norm without mask
+            #[cfg(feature = "simd")]
+            {
+                if mask.is_none() && T::has_simd() {
+                    if let Some(sq_sum) = T::simd_norm_l2_sq(&src.data) {
+                        return Ok(sq_sum.sqrt());
+                    }
+                }
+            }
+
             #[cfg(feature = "parallel")]
             {
                 let sq_sum = if let Some(m) = mask {
@@ -1124,7 +1144,7 @@ pub fn normalize<T>(
     mask: Option<&Matrix<u8>>,
 ) -> Result<()>
 where
-    T: DataType + Send + Sync + FromPrimitive + Default + Copy + ToPrimitive,
+    T: DataType + Send + Sync + FromPrimitive + Default + Copy + ToPrimitive + SimdElement,
 {
     // If dtype is negative, we keep source type. Currently we don't support converting here yet,
     // so we just ignore it if it equals T's depth.
@@ -1334,7 +1354,7 @@ where
 
     #[cfg(not(feature = "parallel"))]
     {
-        for idx in 0..dst_data.len() {
+        for (idx, d) in dst_data.iter_mut().enumerate() {
             let channel = idx % channels;
             let pos = idx / channels;
 
@@ -1369,7 +1389,7 @@ where
             } else {
                 accum
             };
-            dst_data[idx] = T::from_f64(res).unwrap_or_default();
+            *d = T::from_f64(res).unwrap_or_default();
         }
     }
 

@@ -166,11 +166,43 @@ fn bench_imgproc(c: &mut Criterion) {
     let img_512 = Matrix::<u8>::new(512, 512, 1);
     c.bench_function("bilateral_filter_512x512_u8", |b| {
         b.iter(|| {
-            bilateral_filter(
-                black_box(&img_512),
-                -1,
-                25.0,
-                10.0,
+            bilateral_filter(black_box(&img_512), -1, 25.0, 10.0, BorderTypes::default()).unwrap()
+        })
+    });
+
+    // Sobel f32 with realistic data — exercises the SIMD fast-path in fast_deriv_3x3
+    let mut img_f32 = Matrix::<f32>::new(size, size, 1);
+    for (i, v) in img_f32.data.iter_mut().enumerate() {
+        // Gradient-like pattern so the kernel produces non-trivial values
+        let row = (i / size) as f32;
+        let col = (i % size) as f32;
+        *v = (row * 0.25 + col * 0.1).sin() * 128.0 + 128.0;
+    }
+
+    c.bench_function("sobel_3x3_f32_dx_1024x1024", |b| {
+        b.iter(|| {
+            sobel(
+                black_box(&img_f32),
+                1,
+                0,
+                3,
+                1.0,
+                0.0,
+                BorderTypes::default(),
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("sobel_3x3_f32_dy_1024x1024", |b| {
+        b.iter(|| {
+            sobel(
+                black_box(&img_f32),
+                0,
+                1,
+                3,
+                1.0,
+                0.0,
                 BorderTypes::default(),
             )
             .unwrap()
