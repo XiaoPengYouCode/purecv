@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-03-17
+
+### ⚡ Performance
+
+- *(imgproc)* Add bilateral_filter and sobel_f32 SIMD benchmarks
+
+### 🐛 Bug Fixes
+
+- *(simd)* Fix simd_dot/simd_sum returning 0.0 and use bool return in macros
+- *(simd)* Allow dead code for SimdElement trait and clean up threshold.rs
+
+### 📚 Documentation
+
+- Update README for PR 2 Color + Threshold SIMD changes
+- Update README with performance highlights for sobel and bilateral_filter SIMD optimizations
+
+### 🚀 Features
+
+- *(core,imgproc)* Add SIMD acceleration via pulp and full benchmark suite
+- *(imgproc)* Add SIMD acceleration for color conversion and threshold
+- *(imgproc)* Add threshold example
+
 ## [0.1.2] - 2026-03-15
 
 ### 🐛 Bug Fixes
