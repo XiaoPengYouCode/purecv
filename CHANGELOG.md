@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-03-19
+
+### 🐛 Bug Fixes
+
+- Correct indentation in rust.yml file and fix for wrong command
+
+### 📚 Documentation
+
+- Update README to indicate project is a work in progress
+
+### 🚀 Features
+
+- *(version)* Add the new src/version.rs file
+- Add badges to README and update CI workflow for formatting check
+
+### 🚜 Refactor
+
+- Fix in version.rs file for fmt issue
+- Fix in version.rs for test failing issue
+- *(chore)* Restructure CI workflow to separate code formatting and build steps
+
 ## [0.1.3] - 2026-03-17
 
 ### ⚡ Performance
