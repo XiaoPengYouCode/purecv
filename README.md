@@ -208,7 +208,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
   - [x] PR 1 — SIMD infra + `arithm` kernels (`add`, `sub`, `mul`, `div`, `dot`, `magnitude`, `add_weighted`, `convert_scale_abs`, `sqrt`, `min`, `max`, `sum`).
   - [x] PR 2 — Color + Threshold SIMD: fixed-point `cvt_color_*_to_gray` kernels, `simd_threshold()` for all 5 types on `u8`/`f32`/`f64`, new `threshold` example.
   - [x] PR 3 — Derivatives SIMD: `fast_deriv_3x3` interior SIMD pass (`simd_deriv_3x3_row_f32`) achieving **22× speedup** on `sobel_3x3_f32`; new benchmarks for `sobel_3x3_f32_dx/dy` and `bilateral_filter`.
-- [ ] **Phase 3: WebAssembly** - `wasm-bindgen` wrappers, `wasm-pack` build, CI matrix with `wasm32-unknown-unknown` + `simd128`.
+- [x] **Phase 3: WebAssembly** - `wasm-bindgen` wrappers, `wasm-pack` build, CI matrix with `wasm32-unknown-unknown` + `simd128`.
 - [ ] **Phase 4: Image Processing** - Advanced filtering, convolutions, and feature detection.
 - [ ] **Visual examples** — Load real images, apply `threshold` + `cvt_color`, save PNG output (follow-up to `filters.rs`).
 
