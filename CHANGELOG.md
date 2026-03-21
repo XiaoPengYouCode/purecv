@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-21
+
+### 🐛 Bug Fixes
+
+- Fmt issue in wasm rust module
+
+### 🚀 Features
+
+- Introduce a WebAssembly module for purecv, including build scripts and a workspace structure.
+- Improves to WebAssembly module with dual (standard and SIMD) builds and packaging infrastructure.
+- Add GitHub Actions workflows for continuous integration, release management, and package publishing.
+- Add a new WebAssembly image processing demo showcasing various filters on a butterfly image.
+- Introduce and document the new WebAssembly package, including installation instructions and badge updates in the main README.
+
+### 🚜 Refactor
+
+- *(wasm)* Fix wasm crate metadata and core re-exports
+- Improved GitHub Actions workflow for automated releases, including artifact packaging and publishing to Crates.io and NPM.
+
 ## [0.1.4] - 2026-03-19
 
 ### 🐛 Bug Fixes
