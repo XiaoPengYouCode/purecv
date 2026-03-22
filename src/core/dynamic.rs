@@ -208,7 +208,7 @@ impl DynamicMatrix {
             DynamicData::I16(m) => m.at(row, col, channel).map(|v| *v as f64),
             DynamicData::I32(m) => m.at(row, col, channel).map(|v| *v as f64),
             DynamicData::F32(m) => m.at(row, col, channel).map(|v| *v as f64),
-            DynamicData::F64(m) => m.at(row, col, channel).map(|v| *v),
+            DynamicData::F64(m) => m.at(row, col, channel).copied(),
         }
     }
 
