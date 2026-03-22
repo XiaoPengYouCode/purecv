@@ -38,6 +38,7 @@ use wasm_bindgen::prelude::*;
 
 use purecv::core::arithm;
 use purecv::core::dynamic::{DynamicData, DynamicMatrix};
+use purecv::core::matrix::MatType;
 use purecv::core::structural;
 use purecv::core::types::{BorderTypes, Point2i, Size2i};
 use purecv::core::Matrix;
@@ -85,8 +86,14 @@ pub fn init_purecv() {
 /// An opaque wrapper around `DynamicMatrix`, exposed as `Mat` in JavaScript.
 ///
 /// This is the single matrix type used across the entire WASM API.
-/// The element depth (`u8`, `f32`, `f64`, etc.) is selected at construction
-/// time and can be queried or converted at runtime.
+/// The element depth and number of channels are selected at construction time
+/// via an OpenCV-style `MatType` integer (e.g. `CV_8UC3()`, `CV_32FC1()`).
+///
+/// ```js
+/// // Equivalent to cv::Mat m(480, 640, CV_8UC3) in C++ OpenCV
+/// const frame = new Mat(480, 640, CV_8UC3());
+/// const hdr   = new Mat(4,   4,   CV_32FC1());
+/// ```
 #[wasm_bindgen(js_name = "Mat")]
 pub struct Mat {
     inner: DynamicMatrix,
@@ -116,50 +123,31 @@ fn require_u8<'a>(mat: &'a Mat, op_name: &str) -> Result<&'a Matrix<u8>, JsError
 impl Mat {
     // -- Constructors -------------------------------------------------------
 
-    /// Creates a new zero-filled matrix with the given depth.
+    /// Creates a new zero-filled matrix.
     ///
     /// * `rows`     – Number of rows (height).
     /// * `cols`     – Number of columns (width).
-    /// * `channels` – Number of channels (e.g. 1 for gray, 3 for RGB, 4 for RGBA).
-    /// * `depth`    – Element type: `"u8"`, `"i8"`, `"u16"`, `"i16"`, `"i32"`, `"f32"`, `"f64"`.
-    ///               Defaults to `"f32"` if omitted or empty.
+    /// * `mat_type` – OpenCV-style type integer encoding depth + channels.
+    ///               Use the exported constants: `CV_8UC1()`, `CV_8UC3()`,
+    ///               `CV_32FC1()`, etc.
+    ///
+    /// ```js
+    /// const frame = new Mat(480, 640, CV_8UC3());   // u8, 3 channels
+    /// const mask  = new Mat(480, 640, CV_8UC1());   // u8, 1 channel
+    /// const hdr   = new Mat(480, 640, CV_32FC3());  // f32, 3 channels
+    /// ```
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        rows: usize,
-        cols: usize,
-        channels: usize,
-        depth: Option<String>,
-    ) -> Result<Mat, JsError> {
-        let depth_str = depth.unwrap_or_else(|| "f32".to_string());
-        let dm = match depth_str.as_str() {
-            "u8" => DynamicMatrix::new_u8(rows, cols, channels, vec![0u8; rows * cols * channels]),
-            "i8" => DynamicMatrix::new_i8(rows, cols, channels, vec![0i8; rows * cols * channels]),
-            "u16" => {
-                DynamicMatrix::new_u16(rows, cols, channels, vec![0u16; rows * cols * channels])
-            }
-            "i16" => {
-                DynamicMatrix::new_i16(rows, cols, channels, vec![0i16; rows * cols * channels])
-            }
-            "i32" => {
-                DynamicMatrix::new_i32(rows, cols, channels, vec![0i32; rows * cols * channels])
-            }
-            "f32" => {
-                DynamicMatrix::new_f32(rows, cols, channels, vec![0f32; rows * cols * channels])
-            }
-            "f64" => {
-                DynamicMatrix::new_f64(rows, cols, channels, vec![0f64; rows * cols * channels])
-            }
-            other => {
-                return Err(JsError::new(&format!(
-                    "Unknown depth '{other}'. Use one of: u8, i8, u16, i16, i32, f32, f64"
-                )));
-            }
-        };
-        dm.map(|d| Mat { inner: d })
+    pub fn new(rows: usize, cols: usize, mat_type: i32) -> Result<Mat, JsError> {
+        DynamicMatrix::new(rows, cols, MatType(mat_type))
+            .map(|d| Mat { inner: d })
             .map_err(|e| JsError::new(&format!("{e}")))
     }
 
-    /// Creates a Mat from a `Uint8Array`.
+    /// Creates a Mat from a `Uint8Array` (CV_8U depth).
+    ///
+    /// ```js
+    /// const mat = Mat.fromU8Data(2, 2, 3, new Uint8Array([r,g,b, r,g,b, r,g,b, r,g,b]));
+    /// ```
     #[wasm_bindgen(js_name = "fromU8Data")]
     pub fn from_u8_data(
         rows: usize,
@@ -167,23 +155,12 @@ impl Mat {
         channels: usize,
         data: &[u8],
     ) -> Result<Mat, JsError> {
-        let expected = rows * cols * channels;
-        if data.len() != expected {
-            return Err(JsError::new(&format!(
-                "Data length {} does not match {}×{}×{} = {}",
-                data.len(),
-                rows,
-                cols,
-                channels,
-                expected
-            )));
-        }
         let dm = DynamicMatrix::new_u8(rows, cols, channels, data.to_vec())
             .map_err(|e| JsError::new(&format!("{e}")))?;
         Ok(Mat { inner: dm })
     }
 
-    /// Creates a Mat from a `Float32Array`.
+    /// Creates a Mat from a `Float32Array` (CV_32F depth).
     #[wasm_bindgen(js_name = "fromF32Data")]
     pub fn from_f32_data(
         rows: usize,
@@ -191,23 +168,12 @@ impl Mat {
         channels: usize,
         data: &[f32],
     ) -> Result<Mat, JsError> {
-        let expected = rows * cols * channels;
-        if data.len() != expected {
-            return Err(JsError::new(&format!(
-                "Data length {} does not match {}×{}×{} = {}",
-                data.len(),
-                rows,
-                cols,
-                channels,
-                expected
-            )));
-        }
         let dm = DynamicMatrix::new_f32(rows, cols, channels, data.to_vec())
             .map_err(|e| JsError::new(&format!("{e}")))?;
         Ok(Mat { inner: dm })
     }
 
-    /// Creates a Mat from a `Float64Array`.
+    /// Creates a Mat from a `Float64Array` (CV_64F depth).
     #[wasm_bindgen(js_name = "fromF64Data")]
     pub fn from_f64_data(
         rows: usize,
@@ -215,17 +181,6 @@ impl Mat {
         channels: usize,
         data: &[f64],
     ) -> Result<Mat, JsError> {
-        let expected = rows * cols * channels;
-        if data.len() != expected {
-            return Err(JsError::new(&format!(
-                "Data length {} does not match {}×{}×{} = {}",
-                data.len(),
-                rows,
-                cols,
-                channels,
-                expected
-            )));
-        }
         let dm = DynamicMatrix::new_f64(rows, cols, channels, data.to_vec())
             .map_err(|e| JsError::new(&format!("{e}")))?;
         Ok(Mat { inner: dm })
@@ -255,6 +210,13 @@ impl Mat {
     #[wasm_bindgen(getter, js_name = "length")]
     pub fn length(&self) -> usize {
         self.inner.total()
+    }
+
+    /// Returns the OpenCV-style type integer (encodes depth + channels).
+    /// This value matches the constants `CV_8UC3()`, `CV_32FC1()`, etc.
+    #[wasm_bindgen(getter, js_name = "type")]
+    pub fn mat_type(&self) -> i32 {
+        self.inner.mat_type().to_int()
     }
 
     /// Returns the element depth as a string (e.g. `"u8"`, `"f32"`).
@@ -724,10 +686,10 @@ pub fn canny(
 
 /// Sobel derivative filter.
 ///
-/// * `dx`, `dy`      – Order of the derivative in x / y.
-/// * `ksize`         – Aperture size (1, 3, 5, or 7; -1 = Scharr).
+/// * `dx`, `dy`       – Order of the derivative in x / y.
+/// * `ksize`          – Aperture size (1, 3, 5, or 7; -1 = Scharr).
 /// * `scale`, `delta` – Scale factor and optional offset.
-/// * `border_type`   – Border interpolation (integer, see `BorderTypes`).
+/// * `border_type`    – Border interpolation (integer, see `BorderTypes`).
 #[wasm_bindgen(js_name = "sobel")]
 pub fn sobel(
     src: &Mat,
@@ -879,10 +841,132 @@ pub fn bilateral_filter(
 }
 
 // ---------------------------------------------------------------------------
-//  JS-side enum constants (exposed as getter functions)
+//  JS-side enum constants
 // ---------------------------------------------------------------------------
 
-// Color conversion codes
+// -- MatType constants (depth + channels encoded as i32) --------------------
+
+#[wasm_bindgen(js_name = "CV_8UC1")]
+pub fn cv_8uc1() -> i32 {
+    0
+} // CV_8U,  1ch
+#[wasm_bindgen(js_name = "CV_8UC2")]
+pub fn cv_8uc2() -> i32 {
+    8
+} // CV_8U,  2ch
+#[wasm_bindgen(js_name = "CV_8UC3")]
+pub fn cv_8uc3() -> i32 {
+    16
+} // CV_8U,  3ch
+#[wasm_bindgen(js_name = "CV_8UC4")]
+pub fn cv_8uc4() -> i32 {
+    24
+} // CV_8U,  4ch
+
+#[wasm_bindgen(js_name = "CV_8SC1")]
+pub fn cv_8sc1() -> i32 {
+    1
+} // CV_8S,  1ch
+#[wasm_bindgen(js_name = "CV_8SC2")]
+pub fn cv_8sc2() -> i32 {
+    9
+}
+#[wasm_bindgen(js_name = "CV_8SC3")]
+pub fn cv_8sc3() -> i32 {
+    17
+}
+#[wasm_bindgen(js_name = "CV_8SC4")]
+pub fn cv_8sc4() -> i32 {
+    25
+}
+
+#[wasm_bindgen(js_name = "CV_16UC1")]
+pub fn cv_16uc1() -> i32 {
+    2
+} // CV_16U, 1ch
+#[wasm_bindgen(js_name = "CV_16UC2")]
+pub fn cv_16uc2() -> i32 {
+    10
+}
+#[wasm_bindgen(js_name = "CV_16UC3")]
+pub fn cv_16uc3() -> i32 {
+    18
+}
+#[wasm_bindgen(js_name = "CV_16UC4")]
+pub fn cv_16uc4() -> i32 {
+    26
+}
+
+#[wasm_bindgen(js_name = "CV_16SC1")]
+pub fn cv_16sc1() -> i32 {
+    3
+} // CV_16S, 1ch
+#[wasm_bindgen(js_name = "CV_16SC2")]
+pub fn cv_16sc2() -> i32 {
+    11
+}
+#[wasm_bindgen(js_name = "CV_16SC3")]
+pub fn cv_16sc3() -> i32 {
+    19
+}
+#[wasm_bindgen(js_name = "CV_16SC4")]
+pub fn cv_16sc4() -> i32 {
+    27
+}
+
+#[wasm_bindgen(js_name = "CV_32SC1")]
+pub fn cv_32sc1() -> i32 {
+    4
+} // CV_32S, 1ch
+#[wasm_bindgen(js_name = "CV_32SC2")]
+pub fn cv_32sc2() -> i32 {
+    12
+}
+#[wasm_bindgen(js_name = "CV_32SC3")]
+pub fn cv_32sc3() -> i32 {
+    20
+}
+#[wasm_bindgen(js_name = "CV_32SC4")]
+pub fn cv_32sc4() -> i32 {
+    28
+}
+
+#[wasm_bindgen(js_name = "CV_32FC1")]
+pub fn cv_32fc1() -> i32 {
+    5
+} // CV_32F, 1ch
+#[wasm_bindgen(js_name = "CV_32FC2")]
+pub fn cv_32fc2() -> i32 {
+    13
+}
+#[wasm_bindgen(js_name = "CV_32FC3")]
+pub fn cv_32fc3() -> i32 {
+    21
+}
+#[wasm_bindgen(js_name = "CV_32FC4")]
+pub fn cv_32fc4() -> i32 {
+    29
+}
+
+#[wasm_bindgen(js_name = "CV_64FC1")]
+pub fn cv_64fc1() -> i32 {
+    6
+} // CV_64F, 1ch
+#[wasm_bindgen(js_name = "CV_64FC2")]
+pub fn cv_64fc2() -> i32 {
+    14
+}
+#[wasm_bindgen(js_name = "CV_64FC3")]
+pub fn cv_64fc3() -> i32 {
+    22
+}
+#[wasm_bindgen(js_name = "CV_64FC4")]
+pub fn cv_64fc4() -> i32 {
+    30
+}
+
+// -- Color conversion codes -------------------------------------------------
+
 #[wasm_bindgen(js_name = "COLOR_BGR2GRAY")]
 pub fn color_bgr2gray() -> i32 {
     0
@@ -916,7 +1000,8 @@ pub fn color_gray2bgra() -> i32 {
     7
 }
 
-// Threshold types
+// -- Threshold types --------------------------------------------------------
+
 #[wasm_bindgen(js_name = "THRESH_BINARY")]
 pub fn thresh_binary() -> i32 {
     0
@@ -938,7 +1023,8 @@ pub fn thresh_tozero_inv() -> i32 {
     4
 }
 
-// Border types
+// -- Border types -----------------------------------------------------------
+
 #[wasm_bindgen(js_name = "BORDER_CONSTANT")]
 pub fn border_constant() -> i32 {
     0
@@ -960,7 +1046,8 @@ pub fn border_reflect_101() -> i32 {
     4
 }
 
-// Flip codes
+// -- Flip codes -------------------------------------------------------------
+
 #[wasm_bindgen(js_name = "FLIP_VERTICAL")]
 pub fn flip_vertical() -> i32 {
     0
@@ -974,7 +1061,8 @@ pub fn flip_both() -> i32 {
     -1
 }
 
-// Rotate codes
+// -- Rotate codes -----------------------------------------------------------
+
 #[wasm_bindgen(js_name = "ROTATE_90_CLOCKWISE")]
 pub fn rotate_90_clockwise() -> i32 {
     0

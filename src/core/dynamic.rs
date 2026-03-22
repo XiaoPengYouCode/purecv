@@ -34,8 +34,8 @@
  *
  */
 
-use crate::core::error::Result;
-use crate::core::matrix::Matrix;
+use crate::core::error::{PureCvError, Result};
+use crate::core::matrix::{Depth, MatType, Matrix};
 
 /// An enum bridging type-erased dynamic usage to strongly typed generic `Matrix<T>`.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,54 +72,227 @@ macro_rules! dispatch_dynamic {
 }
 
 impl DynamicMatrix {
+    // -- OpenCV-style constructors (MatType as single type argument) ----------
+
+    /// Creates a new zero-filled matrix using an OpenCV-style `MatType`.
+    ///
+    /// This is the primary constructor, mirroring `cv::Mat m(rows, cols, CV_8UC3)`.
+    /// `MatType` encodes both depth and channels in a single `i32` value.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `CV_16F` is requested (not yet supported).
+    ///
+    /// # Example
+    /// ```rust
+    /// use purecv::core::DynamicMatrix;
+    /// use purecv::core::matrix::CV_8UC3;
+    /// 
+    /// let frame = DynamicMatrix::new(480, 640, CV_8UC3).unwrap();
+    /// ```
+    pub fn new(rows: usize, cols: usize, mat_type: MatType) -> Result<Self> {
+        let ch = mat_type.channels();
+        let n = rows * cols * ch;
+        let data = match mat_type.depth() {
+            Depth::CV_8U => DynamicData::U8(Matrix::from_vec(rows, cols, ch, vec![0u8; n])),
+            Depth::CV_8S => DynamicData::I8(Matrix::from_vec(rows, cols, ch, vec![0i8; n])),
+            Depth::CV_16U => DynamicData::U16(Matrix::from_vec(rows, cols, ch, vec![0u16; n])),
+            Depth::CV_16S => DynamicData::I16(Matrix::from_vec(rows, cols, ch, vec![0i16; n])),
+            Depth::CV_32S => DynamicData::I32(Matrix::from_vec(rows, cols, ch, vec![0i32; n])),
+            Depth::CV_32F => DynamicData::F32(Matrix::from_vec(rows, cols, ch, vec![0f32; n])),
+            Depth::CV_64F => DynamicData::F64(Matrix::from_vec(rows, cols, ch, vec![0f64; n])),
+            Depth::CV_16F => {
+                return Err(PureCvError::InvalidInput(
+                    "CV_16F is not yet supported".into(),
+                ))
+            }
+        };
+        Ok(Self { data })
+    }
+
+    /// Creates a zero-filled matrix using a `MatType`.
+    /// Explicit alias for [`new`] — mirrors OpenCV's `Mat::zeros(rows, cols, type)`.
+    pub fn zeros(rows: usize, cols: usize, mat_type: MatType) -> Result<Self> {
+        Self::new(rows, cols, mat_type)
+    }
+
+    /// Creates a matrix filled with ones using a `MatType`.
+    /// Mirrors OpenCV's `Mat::ones(rows, cols, type)`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `CV_16F` is requested (not yet supported).
+    pub fn ones(rows: usize, cols: usize, mat_type: MatType) -> Result<Self> {
+        let ch = mat_type.channels();
+        let n = rows * cols * ch;
+        let data = match mat_type.depth() {
+            Depth::CV_8U => DynamicData::U8(Matrix::from_vec(rows, cols, ch, vec![1u8; n])),
+            Depth::CV_8S => DynamicData::I8(Matrix::from_vec(rows, cols, ch, vec![1i8; n])),
+            Depth::CV_16U => DynamicData::U16(Matrix::from_vec(rows, cols, ch, vec![1u16; n])),
+            Depth::CV_16S => DynamicData::I16(Matrix::from_vec(rows, cols, ch, vec![1i16; n])),
+            Depth::CV_32S => DynamicData::I32(Matrix::from_vec(rows, cols, ch, vec![1i32; n])),
+            Depth::CV_32F => DynamicData::F32(Matrix::from_vec(rows, cols, ch, vec![1f32; n])),
+            Depth::CV_64F => DynamicData::F64(Matrix::from_vec(rows, cols, ch, vec![1f64; n])),
+            Depth::CV_16F => {
+                return Err(PureCvError::InvalidInput(
+                    "CV_16F is not yet supported".into(),
+                ))
+            }
+        };
+        Ok(Self { data })
+    }
+
+    // -- Typed constructors (from existing Vec<T>) ----------------------------
+
+    /// Creates a `DynamicMatrix` from an existing `Vec<u8>`.
+    ///
+    /// Use this when you already have pixel data in hand (e.g. from a decoder or
+    /// a JS `Uint8Array`). The data is not copied — ownership is transferred.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_u8(rows: usize, cols: usize, channels: usize, data: Vec<u8>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::U8(mat),
+            data: DynamicData::U8(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<i8>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_i8(rows: usize, cols: usize, channels: usize, data: Vec<i8>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::I8(mat),
+            data: DynamicData::I8(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<u16>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_u16(rows: usize, cols: usize, channels: usize, data: Vec<u16>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::U16(mat),
+            data: DynamicData::U16(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<i16>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_i16(rows: usize, cols: usize, channels: usize, data: Vec<i16>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::I16(mat),
+            data: DynamicData::I16(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<i32>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_i32(rows: usize, cols: usize, channels: usize, data: Vec<i32>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::I32(mat),
+            data: DynamicData::I32(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<f32>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_f32(rows: usize, cols: usize, channels: usize, data: Vec<f32>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::F32(mat),
+            data: DynamicData::F32(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
 
+    /// Creates a `DynamicMatrix` from an existing `Vec<f64>`.
+    ///
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if `data.len() != rows * cols * channels`.
     pub fn new_f64(rows: usize, cols: usize, channels: usize, data: Vec<f64>) -> Result<Self> {
-        let mat = Matrix::from_vec(rows, cols, channels, data);
+        let expected = rows * cols * channels;
+        if data.len() != expected {
+            return Err(PureCvError::InvalidInput(format!(
+                "Data length {} does not match {}×{}×{} = {}",
+                data.len(),
+                rows,
+                cols,
+                channels,
+                expected
+            )));
+        }
         Ok(Self {
-            data: DynamicData::F64(mat),
+            data: DynamicData::F64(Matrix::from_vec(rows, cols, channels, data)),
         })
     }
+
+    // -- Dimension accessors --------------------------------------------------
 
     pub fn rows(&self) -> usize {
         dispatch_dynamic!(&self.data, mat => mat.rows)
@@ -131,6 +304,19 @@ impl DynamicMatrix {
 
     pub fn channels(&self) -> usize {
         dispatch_dynamic!(&self.data, mat => mat.channels)
+    }
+
+    /// Returns the `MatType` of this matrix (encodes depth + channels).
+    pub fn mat_type(&self) -> MatType {
+        match &self.data {
+            DynamicData::U8(m) => MatType::new(Depth::CV_8U, m.channels),
+            DynamicData::I8(m) => MatType::new(Depth::CV_8S, m.channels),
+            DynamicData::U16(m) => MatType::new(Depth::CV_16U, m.channels),
+            DynamicData::I16(m) => MatType::new(Depth::CV_16S, m.channels),
+            DynamicData::I32(m) => MatType::new(Depth::CV_32S, m.channels),
+            DynamicData::F32(m) => MatType::new(Depth::CV_32F, m.channels),
+            DynamicData::F64(m) => MatType::new(Depth::CV_64F, m.channels),
+        }
     }
 
     /// Returns a human-readable name of the element depth (e.g. `"u8"`, `"f32"`).
@@ -214,7 +400,9 @@ impl DynamicMatrix {
 
     // -- Type conversion -----------------------------------------------------
 
-    /// Creates a new DynamicMatrix with a different element depth.
+    /// Creates a new `DynamicMatrix` with a different element depth.
+    ///
+    /// `depth` is a string: `"u8"`, `"i8"`, `"u16"`, `"i16"`, `"i32"`, `"f32"`, `"f64"`.
     pub fn convert_to(&self, depth: &str) -> Result<DynamicMatrix> {
         macro_rules! convert_inner {
             ($src_mat:expr, $depth:expr) => {
