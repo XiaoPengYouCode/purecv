@@ -250,6 +250,9 @@ impl<T: Default + Clone> Matrix<T> {
     /// Safely retrieves a reference to a specific pixel's channel value.
     #[inline]
     pub fn get(&self, row: usize, col: usize, channel: usize) -> Option<&T> {
+        if row >= self.rows || col >= self.cols || channel >= self.channels {
+            return None;
+        }
         let idx = self.flat_index(row, col, channel);
         self.data.get(idx)
     }
@@ -266,6 +269,9 @@ impl<T: Default + Clone> Matrix<T> {
     /// Safely retrieves a mutable reference to a specific pixel's channel value.
     #[inline]
     pub fn get_mut(&mut self, row: usize, col: usize, channel: usize) -> Option<&mut T> {
+        if row >= self.rows || col >= self.cols || channel >= self.channels {
+            return None;
+        }
         let idx = self.flat_index(row, col, channel);
         self.data.get_mut(idx)
     }
@@ -282,6 +288,9 @@ impl<T: Default + Clone> Matrix<T> {
     /// Sets a pixel's channel value using usize indices.
     #[inline]
     pub fn set(&mut self, row: usize, col: usize, channel: usize, value: T) {
+        if row >= self.rows || col >= self.cols || channel >= self.channels {
+            return;
+        }
         let idx = self.flat_index(row, col, channel);
         if let Some(p) = self.data.get_mut(idx) {
             *p = value;

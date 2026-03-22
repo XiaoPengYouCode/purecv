@@ -382,7 +382,7 @@ mod tests {
         assert!(o.data.iter().all(|&v| v == 1));
         assert_eq!(o.mat_type(), CV_16SC2);
 
-        // Test error when depth mismatch
+        // Test error when depth mismatch on new_with_type
         let err_res = Matrix::<u8>::new_with_type(10, 20, CV_32FC1);
         assert!(matches!(
             err_res,
@@ -679,5 +679,179 @@ mod tests {
         for i in 3..6 {
             assert_eq!(labels.data[i], lb);
         }
+    }
+
+    // ---- Matrix accessor / mutator tests ----
+
+    #[test]
+    fn test_get_and_get_mut() {
+        let mut mat = Matrix::<u8>::from_vec(
+            2,
+            3,
+            2,
+            vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        );
+
+        // get: valid indices
+        assert_eq!(mat.get(0, 0, 0), Some(&10u8));
+        assert_eq!(mat.get(0, 2, 1), Some(&60u8));
+        assert_eq!(mat.get(1, 1, 0), Some(&90u8));
+
+        // get: out-of-bounds returns None
+        assert_eq!(mat.get(2, 0, 0), None);
+        assert_eq!(mat.get(0, 3, 0), None);
+        assert_eq!(mat.get(0, 0, 2), None);
+
+        // get_mut: modify a value and verify
+        if let Some(v) = mat.get_mut(1, 2, 1) {
+            *v = 255;
+        }
+        assert_eq!(mat.get(1, 2, 1), Some(&255u8));
+
+        // get_mut: out-of-bounds returns None
+        assert_eq!(mat.get_mut(5, 0, 0), None);
+    }
+
+    #[test]
+    fn test_at_and_at_mut() {
+        let mut mat = Matrix::<u8>::from_vec(2, 2, 1, vec![1, 2, 3, 4]);
+
+        // at: positive valid indices
+        assert_eq!(mat.at(0, 0, 0), Some(&1u8));
+        assert_eq!(mat.at(1, 1, 0), Some(&4u8));
+
+        // at: negative indices must return None
+        assert_eq!(mat.at(-1, 0, 0), None);
+        assert_eq!(mat.at(0, -1, 0), None);
+        assert_eq!(mat.at(-1, -1, 0), None);
+
+        // at: out-of-bounds positive
+        assert_eq!(mat.at(2, 0, 0), None);
+
+        // at_mut: negative indices must return None
+        assert_eq!(mat.at_mut(-1, 0, 0), None);
+        assert_eq!(mat.at_mut(0, -5, 0), None);
+
+        // at_mut: modify a value
+        if let Some(v) = mat.at_mut(0, 1, 0) {
+            *v = 99;
+        }
+        assert_eq!(mat.at(0, 1, 0), Some(&99u8));
+    }
+
+    #[test]
+    fn test_set() {
+        let mut mat = Matrix::<f32>::zeros(3, 3, 1);
+
+        // set a value and verify with get
+        mat.set(1, 2, 0, 3.14);
+        assert_eq!(mat.get(1, 2, 0), Some(&3.14f32));
+
+        // set at out-of-bounds: must be a silent no-op, not a panic
+        mat.set(99, 99, 0, 1.0);
+        // if we get here without panic the test passes
+    }
+
+    #[test]
+    fn test_as_slice_and_as_mut_slice() {
+        let mut mat = Matrix::<u8>::from_vec(2, 2, 1, vec![1, 2, 3, 4]);
+
+        // as_slice: correct length and values
+        let s = mat.as_slice();
+        assert_eq!(s.len(), 4);
+        assert_eq!(s, &[1u8, 2, 3, 4]);
+
+        // as_mut_slice: modify through slice, verify via get
+        let ms = mat.as_mut_slice();
+        ms[0] = 42;
+        assert_eq!(mat.get(0, 0, 0), Some(&42u8));
+    }
+
+    // ---- Constructor variants ----
+
+    #[test]
+    fn test_zeros_from_size_and_ones_from_size() {
+        use crate::core::Size;
+
+        let sz = Size::new(4usize, 3usize); // width=4, height=3
+        let z = Matrix::<f32>::zeros_from_size(sz, 1);
+        assert_eq!(z.rows, 3);
+        assert_eq!(z.cols, 4);
+        assert_eq!(z.channels, 1);
+        assert_eq!(z.data.len(), 12);
+        assert!(z.data.iter().all(|&v| v == 0.0));
+
+        let sz2 = Size::new(2usize, 2usize);
+        let o = Matrix::<u8>::ones_from_size(sz2, 3);
+        assert_eq!(o.rows, 2);
+        assert_eq!(o.cols, 2);
+        assert_eq!(o.channels, 3);
+        assert_eq!(o.data.len(), 12);
+        assert!(o.data.iter().all(|&v| v == 1));
+    }
+
+    // ---- with_type error cases ----
+
+    #[test]
+    fn test_zeros_with_type_error() {
+        // depth mismatch: u8 matrix with f32 MatType
+        let err = Matrix::<u8>::zeros_with_type(4, 4, CV_32FC1);
+        assert!(matches!(
+            err,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_ones_with_type_error() {
+        // depth mismatch: f32 matrix with u8 MatType
+        let err = Matrix::<f32>::ones_with_type(4, 4, CV_8UC1);
+        assert!(matches!(
+            err,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
+    }
+
+    // ---- dims_match ----
+
+    #[test]
+    fn test_dims_match() {
+        let a = Matrix::<u8>::new(4, 4, 3);
+        let b = Matrix::<u8>::new(4, 4, 3);
+        let c = Matrix::<u8>::new(4, 4, 1);
+        let d = Matrix::<f32>::new(2, 4, 3); // different type, same dims as a
+
+        assert!(a.dims_match(&b));
+
+        // different channels
+        assert!(!a.dims_match(&c));
+
+        // different rows — Matrix<f32> vs Matrix<u8>, dims_match is generic over U
+        assert!(!a.dims_match(&d));
+
+        // single-element matrix matches itself
+        let e = Matrix::<i32>::new(1, 1, 1);
+        assert!(e.dims_match(&e.clone()));
+    }
+
+    // ---- create no-op branch ----
+
+    #[test]
+    fn test_create_noop() {
+        let mut mat = Matrix::<u8>::from_vec(2, 3, 1, vec![1, 2, 3, 4, 5, 6]);
+
+        // Calling create with the same dims must not reallocate (data preserved)
+        mat.create(2, 3, 1);
+        assert_eq!(mat.rows, 2);
+        assert_eq!(mat.cols, 3);
+        assert_eq!(mat.channels, 1);
+        assert_eq!(mat.data, vec![1u8, 2, 3, 4, 5, 6], "data must be unchanged");
+
+        // Calling create with different dims resets to default
+        mat.create(1, 2, 2);
+        assert_eq!(mat.rows, 1);
+        assert_eq!(mat.cols, 2);
+        assert_eq!(mat.channels, 2);
+        assert_eq!(mat.data, vec![0u8; 4], "data must be zeroed after resize");
     }
 }
