@@ -86,7 +86,7 @@ impl DynamicMatrix {
     /// ```rust
     /// use purecv::core::DynamicMatrix;
     /// use purecv::core::matrix::CV_8UC3;
-    /// 
+    ///
     /// let frame = DynamicMatrix::new(480, 640, CV_8UC3).unwrap();
     /// ```
     pub fn new(rows: usize, cols: usize, mat_type: MatType) -> Result<Self> {
