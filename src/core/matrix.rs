@@ -320,18 +320,21 @@ impl<T: Default + Clone> Matrix<T> {
 
     /// Creates a new `Matrix` with a specific `MatType`.
     ///
-    /// # Panics
-    /// Panics if the depth of `mat_type` does not match `T`.
-    pub fn new_with_type(rows: usize, cols: usize, mat_type: MatType) -> Self
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if the depth of `mat_type`
+    /// does not match the element type `T`.
+    pub fn new_with_type(rows: usize, cols: usize, mat_type: MatType) -> Result<Self>
     where
         T: Default + Clone + DataType,
     {
-        assert_eq!(
-            mat_type.depth(),
-            T::depth(),
-            "MatType depth must match matrix element type"
-        );
-        Self::new(rows, cols, mat_type.channels())
+        if mat_type.depth() != T::depth() {
+            return Err(PureCvError::InvalidInput(format!(
+                "MatType depth {:?} does not match element type {:?}",
+                mat_type.depth(),
+                T::depth()
+            )));
+        }
+        Ok(Self::new(rows, cols, mat_type.channels()))
     }
 
     /// Returns the number of channels.
@@ -363,18 +366,22 @@ impl<T: Default + Clone> Matrix<T> {
 
     /// Reallocates the matrix to the specified size and `MatType`.
     ///
-    /// # Panics
-    /// Panics if the depth of `mat_type` does not match `T`.
-    pub fn create_with_type(&mut self, rows: usize, cols: usize, mat_type: MatType)
+    /// # Errors
+    /// Returns `PureCvError::InvalidInput` if the depth of `mat_type`
+    /// does not match the element type `T`.
+    pub fn create_with_type(&mut self, rows: usize, cols: usize, mat_type: MatType) -> Result<()>
     where
         T: Default + Clone + DataType,
     {
-        assert_eq!(
-            mat_type.depth(),
-            T::depth(),
-            "MatType depth must match matrix element type"
-        );
+        if mat_type.depth() != T::depth() {
+            return Err(PureCvError::InvalidInput(format!(
+                "MatType depth {:?} does not match element type {:?}",
+                mat_type.depth(),
+                T::depth()
+            )));
+        }
         self.create(rows, cols, mat_type.channels());
+        Ok(())
     }
 
     /// Converts the matrix elements to a different type `U`.
@@ -435,29 +442,33 @@ impl<T: num_traits::Zero + num_traits::One + Default + Clone> Matrix<T> {
     }
 
     /// Returns a zero array of the specified size and `MatType`.
-    pub fn zeros_with_type(rows: usize, cols: usize, mat_type: MatType) -> Self
+    pub fn zeros_with_type(rows: usize, cols: usize, mat_type: MatType) -> Result<Self>
     where
         T: DataType,
     {
-        assert_eq!(
-            mat_type.depth(),
-            T::depth(),
-            "MatType depth must match element type"
-        );
-        Self::zeros(rows, cols, mat_type.channels())
+        if mat_type.depth() != T::depth() {
+            return Err(PureCvError::InvalidInput(format!(
+                "MatType depth {:?} does not match element type {:?}",
+                mat_type.depth(),
+                T::depth()
+            )));
+        }
+        Ok(Self::zeros(rows, cols, mat_type.channels()))
     }
 
     /// Returns an array of all 1's of the specified size and `MatType`.
-    pub fn ones_with_type(rows: usize, cols: usize, mat_type: MatType) -> Self
+    pub fn ones_with_type(rows: usize, cols: usize, mat_type: MatType) -> Result<Self>
     where
         T: DataType,
     {
-        assert_eq!(
-            mat_type.depth(),
-            T::depth(),
-            "MatType depth must match element type"
-        );
-        Self::ones(rows, cols, mat_type.channels())
+        if mat_type.depth() != T::depth() {
+            return Err(PureCvError::InvalidInput(format!(
+                "MatType depth {:?} does not match element type {:?}",
+                mat_type.depth(),
+                T::depth()
+            )));
+        }
+        Ok(Self::ones(rows, cols, mat_type.channels()))
     }
 
     /// Returns an identity matrix of the specified size and type.
