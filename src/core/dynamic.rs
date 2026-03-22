@@ -219,16 +219,30 @@ impl DynamicMatrix {
         macro_rules! convert_inner {
             ($src_mat:expr, $depth:expr) => {
                 match $depth {
-                    "u8" => Ok(DynamicMatrix { data: DynamicData::U8($src_mat.convert_to::<u8>()?) }),
-                    "i8" => Ok(DynamicMatrix { data: DynamicData::I8($src_mat.convert_to::<i8>()?) }),
-                    "u16" => Ok(DynamicMatrix { data: DynamicData::U16($src_mat.convert_to::<u16>()?) }),
-                    "i16" => Ok(DynamicMatrix { data: DynamicData::I16($src_mat.convert_to::<i16>()?) }),
-                    "i32" => Ok(DynamicMatrix { data: DynamicData::I32($src_mat.convert_to::<i32>()?) }),
-                    "f32" => Ok(DynamicMatrix { data: DynamicData::F32($src_mat.convert_to::<f32>()?) }),
-                    "f64" => Ok(DynamicMatrix { data: DynamicData::F64($src_mat.convert_to::<f64>()?) }),
-                    other => Err(crate::core::error::PureCvError::InvalidInput(
-                        format!("Unknown depth: {other}")
-                    )),
+                    "u8" => Ok(DynamicMatrix {
+                        data: DynamicData::U8($src_mat.convert_to::<u8>()?),
+                    }),
+                    "i8" => Ok(DynamicMatrix {
+                        data: DynamicData::I8($src_mat.convert_to::<i8>()?),
+                    }),
+                    "u16" => Ok(DynamicMatrix {
+                        data: DynamicData::U16($src_mat.convert_to::<u16>()?),
+                    }),
+                    "i16" => Ok(DynamicMatrix {
+                        data: DynamicData::I16($src_mat.convert_to::<i16>()?),
+                    }),
+                    "i32" => Ok(DynamicMatrix {
+                        data: DynamicData::I32($src_mat.convert_to::<i32>()?),
+                    }),
+                    "f32" => Ok(DynamicMatrix {
+                        data: DynamicData::F32($src_mat.convert_to::<f32>()?),
+                    }),
+                    "f64" => Ok(DynamicMatrix {
+                        data: DynamicData::F64($src_mat.convert_to::<f64>()?),
+                    }),
+                    other => Err(crate::core::error::PureCvError::InvalidInput(format!(
+                        "Unknown depth: {other}"
+                    ))),
                 }
             };
         }

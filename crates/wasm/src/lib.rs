@@ -269,45 +269,36 @@ impl Mat {
     /// Errors if this Mat is not of depth `u8`.
     #[wasm_bindgen(js_name = "dataU8")]
     pub fn data_u8(&self) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .data_u8()
-            .map(|s| s.to_vec())
-            .ok_or_else(|| {
-                JsError::new(&format!(
-                    "dataU8() requires u8 depth, but Mat has depth '{}'",
-                    self.inner.depth_name()
-                ))
-            })
+        self.inner.data_u8().map(|s| s.to_vec()).ok_or_else(|| {
+            JsError::new(&format!(
+                "dataU8() requires u8 depth, but Mat has depth '{}'",
+                self.inner.depth_name()
+            ))
+        })
     }
 
     /// Returns a copy of the underlying data as a `Float32Array`.
     /// Errors if this Mat is not of depth `f32`.
     #[wasm_bindgen(js_name = "dataF32")]
     pub fn data_f32(&self) -> Result<Vec<f32>, JsError> {
-        self.inner
-            .data_f32()
-            .map(|s| s.to_vec())
-            .ok_or_else(|| {
-                JsError::new(&format!(
-                    "dataF32() requires f32 depth, but Mat has depth '{}'",
-                    self.inner.depth_name()
-                ))
-            })
+        self.inner.data_f32().map(|s| s.to_vec()).ok_or_else(|| {
+            JsError::new(&format!(
+                "dataF32() requires f32 depth, but Mat has depth '{}'",
+                self.inner.depth_name()
+            ))
+        })
     }
 
     /// Returns a copy of the underlying data as a `Float64Array`.
     /// Errors if this Mat is not of depth `f64`.
     #[wasm_bindgen(js_name = "dataF64")]
     pub fn data_f64(&self) -> Result<Vec<f64>, JsError> {
-        self.inner
-            .data_f64()
-            .map(|s| s.to_vec())
-            .ok_or_else(|| {
-                JsError::new(&format!(
-                    "dataF64() requires f64 depth, but Mat has depth '{}'",
-                    self.inner.depth_name()
-                ))
-            })
+        self.inner.data_f64().map(|s| s.to_vec()).ok_or_else(|| {
+            JsError::new(&format!(
+                "dataF64() requires f64 depth, but Mat has depth '{}'",
+                self.inner.depth_name()
+            ))
+        })
     }
 
     /// Sets the underlying data from a `Uint8Array`. Errors if depth is not `u8`.
@@ -501,45 +492,93 @@ pub fn max(a: &Mat, b: &Mat) -> Result<Mat, JsError> {
 #[wasm_bindgen(js_name = "flip")]
 pub fn flip(src: &Mat, flip_code: i32) -> Result<Mat, JsError> {
     let data = match &src.inner.data {
-        DynamicData::U8(m) => DynamicData::U8(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I8(m) => DynamicData::I8(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::U16(m) => DynamicData::U16(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I16(m) => DynamicData::I16(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I32(m) => DynamicData::I32(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F32(m) => DynamicData::F32(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F64(m) => DynamicData::F64(structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?),
+        DynamicData::U8(m) => DynamicData::U8(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I8(m) => DynamicData::I8(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::U16(m) => DynamicData::U16(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I16(m) => DynamicData::I16(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I32(m) => DynamicData::I32(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::F32(m) => DynamicData::F32(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::F64(m) => DynamicData::F64(
+            structural::flip(m, flip_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
     };
-    Ok(Mat { inner: DynamicMatrix { data } })
+    Ok(Mat {
+        inner: DynamicMatrix { data },
+    })
 }
 
 /// Transposes a matrix (swaps rows and columns).
 #[wasm_bindgen(js_name = "transpose")]
 pub fn transpose(src: &Mat) -> Result<Mat, JsError> {
     let data = match &src.inner.data {
-        DynamicData::U8(m) => DynamicData::U8(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I8(m) => DynamicData::I8(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::U16(m) => DynamicData::U16(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I16(m) => DynamicData::I16(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I32(m) => DynamicData::I32(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F32(m) => DynamicData::F32(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F64(m) => DynamicData::F64(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?),
+        DynamicData::U8(m) => {
+            DynamicData::U8(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::I8(m) => {
+            DynamicData::I8(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::U16(m) => {
+            DynamicData::U16(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::I16(m) => {
+            DynamicData::I16(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::I32(m) => {
+            DynamicData::I32(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::F32(m) => {
+            DynamicData::F32(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
+        DynamicData::F64(m) => {
+            DynamicData::F64(structural::transpose(m).map_err(|e| JsError::new(&format!("{e}")))?)
+        }
     };
-    Ok(Mat { inner: DynamicMatrix { data } })
+    Ok(Mat {
+        inner: DynamicMatrix { data },
+    })
 }
 
 /// Rotates a matrix: 0 = 90° CW, 1 = 180°, 2 = 90° CCW.
 #[wasm_bindgen(js_name = "rotate")]
 pub fn rotate(src: &Mat, rotate_code: i32) -> Result<Mat, JsError> {
     let data = match &src.inner.data {
-        DynamicData::U8(m) => DynamicData::U8(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I8(m) => DynamicData::I8(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::U16(m) => DynamicData::U16(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I16(m) => DynamicData::I16(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::I32(m) => DynamicData::I32(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F32(m) => DynamicData::F32(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
-        DynamicData::F64(m) => DynamicData::F64(structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?),
+        DynamicData::U8(m) => DynamicData::U8(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I8(m) => DynamicData::I8(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::U16(m) => DynamicData::U16(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I16(m) => DynamicData::I16(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::I32(m) => DynamicData::I32(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::F32(m) => DynamicData::F32(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
+        DynamicData::F64(m) => DynamicData::F64(
+            structural::rotate(m, rotate_code).map_err(|e| JsError::new(&format!("{e}")))?,
+        ),
     };
-    Ok(Mat { inner: DynamicMatrix { data } })
+    Ok(Mat {
+        inner: DynamicMatrix { data },
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -760,18 +799,12 @@ pub fn laplacian(
 /// * `ksize_w`, `ksize_h` – Kernel width and height.
 /// * `border_type`        – Border interpolation (integer, see `BorderTypes`).
 #[wasm_bindgen(js_name = "blur")]
-pub fn blur(
-    src: &Mat,
-    ksize_w: i32,
-    ksize_h: i32,
-    border_type: i32,
-) -> Result<Mat, JsError> {
+pub fn blur(src: &Mat, ksize_w: i32, ksize_h: i32, border_type: i32) -> Result<Mat, JsError> {
     let m = require_f32(src, "blur")?;
     let bt = border_type_from_i32(border_type)?;
     let ksize = Size2i::new(ksize_w, ksize_h);
     let anchor = Point2i::new(-1, -1);
-    let result =
-        filter::blur(m, ksize, anchor, bt).map_err(|e| JsError::new(&format!("{e}")))?;
+    let result = filter::blur(m, ksize, anchor, bt).map_err(|e| JsError::new(&format!("{e}")))?;
     Ok(Mat {
         inner: DynamicMatrix {
             data: DynamicData::F32(result),
@@ -812,8 +845,7 @@ pub fn gaussian_blur(
 #[wasm_bindgen(js_name = "medianBlur")]
 pub fn median_blur(src: &Mat, ksize: i32) -> Result<Mat, JsError> {
     let m = require_f32(src, "medianBlur")?;
-    let result =
-        filter::median_blur(m, ksize).map_err(|e| JsError::new(&format!("{e}")))?;
+    let result = filter::median_blur(m, ksize).map_err(|e| JsError::new(&format!("{e}")))?;
     Ok(Mat {
         inner: DynamicMatrix {
             data: DynamicData::F32(result),
