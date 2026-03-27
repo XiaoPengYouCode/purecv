@@ -166,51 +166,52 @@ async function run() {
         }
 
         // Wrap in purecv matrix
-        const matRgbU8 = m.PureCvMatrixU8.fromData(height, width, 3, rgbU8);
+        const matRgbU8 = m.Mat.fromU8Data(height, width, 3, rgbU8);
+
 
         // ── Greyscale (u8) ───────────────────────────────────────────────────
         log('cvtColor RGB→Gray…', 'info');
         const matGrayU8 = m.cvtColor(matRgbU8, m.COLOR_RGB2GRAY());
-        drawGray('c-gray', matGrayU8.data(), width, height);
+        drawGray('c-gray', matGrayU8.dataU8(), width, height);
         log('Greyscale ✓');
 
         // Convert grey to f32 for filter/edge ops
-        const matGrayF32 = m.convertU8ToF32(matGrayU8);
+        const matGrayF32 = matGrayU8.convertTo("f32");
         // Convert colour to f32 for blur ops (blur* only accept f32)
-        const matRgbF32 = m.convertU8ToF32(matRgbU8);
+        const matRgbF32 = matRgbU8.convertTo("f32");
 
         const BORDER = m.BORDER_REFLECT_101();
 
         // ── Blur 5×5 ─────────────────────────────────────────────────────────
         log('blur 5×5…', 'info');
         const matBlurF32 = m.blur(matRgbF32, 5, 5, BORDER);
-        const blurU8 = m.convertF32ToU8(matBlurF32);
-        drawRGB('c-blur', blurU8.data(), width, height);
+        const blurU8 = matBlurF32.convertTo("u8");
+        drawRGB('c-blur', blurU8.dataU8(), width, height);
         log('Blur ✓');
 
         // ── Gaussian Blur 5×5 σ=1.75   ──────────────────────────────────────────
         log('gaussianBlur 5×5 σ=1.75…', 'info');
         const matGaussF32 = m.gaussianBlur(matRgbF32, 5, 5, 1.75, 1.75, BORDER);
-        const gaussU8 = m.convertF32ToU8(matGaussF32);
-        drawRGB('c-gauss', gaussU8.data(), width, height);
+        const gaussU8 = matGaussF32.convertTo("u8");
+        drawRGB('c-gauss', gaussU8.dataU8(), width, height);
         log('Gaussian blur ✓');
 
         // ── Canny ─────────────────────────────────────────────────────────────
         log('canny lo=50 hi=150…', 'info');
         const matCanny = m.canny(matGrayF32, 50, 150, 3, false);
-        drawGray('c-canny', matCanny.data(), width, height);
+        drawGray('c-canny', matCanny.dataU8(), width, height);
         log('Canny ✓');
 
         // ── Sobel X ───────────────────────────────────────────────────────────
         log('sobel dx=1 dy=0 k=3…', 'info');
         const matSobelF32 = m.sobel(matGrayF32, 1, 0, 3, 1.0, 0.0, BORDER);
-        drawGray('c-sobel', normalizeF32(matSobelF32.data()), width, height);
+        drawGray('c-sobel', normalizeF32(matSobelF32.dataF32()), width, height);
         log('Sobel ✓');
 
         // ── Laplacian ─────────────────────────────────────────────────────────
         log('laplacian k=3…', 'info');
         const matLapF32 = m.laplacian(matGrayF32, 3, 1.0, 0.0, BORDER);
-        drawGray('c-laplacian', normalizeF32(matLapF32.data()), width, height);
+        drawGray('c-laplacian', normalizeF32(matLapF32.dataF32()), width, height);
         log('Laplacian ✓');
 
         // ── Threshold binary 127 ──────────────────────────────────────────────
@@ -218,7 +219,7 @@ async function run() {
         const threshResult = m.threshold(matGrayF32, 127.0, 255.0, m.THRESH_BINARY());
         const threshVal = threshResult.threshVal;  // read BEFORE getMatrix() consumes the object
         const threshMat = threshResult.getMatrix(); // moves self — threshResult is now invalid
-        drawGray('c-thresh', normalizeF32(threshMat.data()), width, height);
+        drawGray('c-thresh', normalizeF32(threshMat.dataF32()), width, height);
         log(`Threshold ✓  (val=${threshVal})`);
 
         // Cleanup

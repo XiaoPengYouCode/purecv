@@ -364,23 +364,38 @@ mod tests {
         assert_eq!(f32::depth(), Depth::CV_32F);
 
         // Test Matrix::new_with_type
-        let mat = Matrix::<u8>::new_with_type(10, 20, CV_8UC3);
+        let mat = Matrix::<u8>::new_with_type(10, 20, CV_8UC3).unwrap();
         assert_eq!(mat.rows, 10);
         assert_eq!(mat.cols, 20);
         assert_eq!(mat.channels, 3);
         assert_eq!(mat.mat_type(), CV_8UC3);
 
         // Test Matrix::zeros_with_type
-        let z = Matrix::<f32>::zeros_with_type(5, 5, CV_32FC1);
+        let z = Matrix::<f32>::zeros_with_type(5, 5, CV_32FC1).unwrap();
         assert_eq!(z.data.len(), 25);
         assert!(z.data.iter().all(|&v| v == 0.0));
         assert_eq!(z.mat_type(), CV_32FC1);
 
         // Test Matrix::ones_with_type
-        let o = Matrix::<i16>::ones_with_type(2, 2, CV_16SC2);
+        let o = Matrix::<i16>::ones_with_type(2, 2, CV_16SC2).unwrap();
         assert_eq!(o.data.len(), 8);
         assert!(o.data.iter().all(|&v| v == 1));
         assert_eq!(o.mat_type(), CV_16SC2);
+
+        // Test error when depth mismatch on new_with_type
+        let err_res = Matrix::<u8>::new_with_type(10, 20, CV_32FC1);
+        assert!(matches!(
+            err_res,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
+
+        // Test error when depth mismatch on create_with_type
+        let mut mat = Matrix::<u8>::zeros(1, 1, 1);
+        let err_create = mat.create_with_type(10, 20, CV_32FC1);
+        assert!(matches!(
+            err_create,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
     }
 
     #[test]
@@ -664,5 +679,293 @@ mod tests {
         for i in 3..6 {
             assert_eq!(labels.data[i], lb);
         }
+    }
+
+    // ---- Matrix accessor / mutator tests ----
+
+    #[test]
+    fn test_get_and_get_mut() {
+        let mut mat = Matrix::<u8>::from_vec(
+            2,
+            3,
+            2,
+            vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        );
+
+        // get: valid indices
+        assert_eq!(mat.get(0, 0, 0), Some(&10u8));
+        assert_eq!(mat.get(0, 2, 1), Some(&60u8));
+        assert_eq!(mat.get(1, 1, 0), Some(&90u8));
+
+        // get: out-of-bounds returns None
+        assert_eq!(mat.get(2, 0, 0), None);
+        assert_eq!(mat.get(0, 3, 0), None);
+        assert_eq!(mat.get(0, 0, 2), None);
+
+        // get_mut: modify a value and verify
+        if let Some(v) = mat.get_mut(1, 2, 1) {
+            *v = 255;
+        }
+        assert_eq!(mat.get(1, 2, 1), Some(&255u8));
+
+        // get_mut: out-of-bounds returns None
+        assert_eq!(mat.get_mut(5, 0, 0), None);
+    }
+
+    #[test]
+    fn test_at_and_at_mut() {
+        let mut mat = Matrix::<u8>::from_vec(2, 2, 1, vec![1, 2, 3, 4]);
+
+        // at: positive valid indices
+        assert_eq!(mat.at(0, 0, 0), Some(&1u8));
+        assert_eq!(mat.at(1, 1, 0), Some(&4u8));
+
+        // at: negative indices must return None
+        assert_eq!(mat.at(-1, 0, 0), None);
+        assert_eq!(mat.at(0, -1, 0), None);
+        assert_eq!(mat.at(-1, -1, 0), None);
+
+        // at: out-of-bounds positive
+        assert_eq!(mat.at(2, 0, 0), None);
+
+        // at_mut: negative indices must return None
+        assert_eq!(mat.at_mut(-1, 0, 0), None);
+        assert_eq!(mat.at_mut(0, -5, 0), None);
+
+        // at_mut: modify a value
+        if let Some(v) = mat.at_mut(0, 1, 0) {
+            *v = 99;
+        }
+        assert_eq!(mat.at(0, 1, 0), Some(&99u8));
+    }
+
+    #[test]
+    fn test_set() {
+        let mut mat = Matrix::<f32>::zeros(3, 3, 1);
+
+        // set a value and verify with get
+        mat.set(1, 2, 0, 3.14);
+        assert_eq!(mat.get(1, 2, 0), Some(&3.14f32));
+
+        // set at out-of-bounds: must be a silent no-op, not a panic
+        mat.set(99, 99, 0, 1.0);
+        // if we get here without panic the test passes
+    }
+
+    #[test]
+    fn test_as_slice_and_as_mut_slice() {
+        let mut mat = Matrix::<u8>::from_vec(2, 2, 1, vec![1, 2, 3, 4]);
+
+        // as_slice: correct length and values
+        let s = mat.as_slice();
+        assert_eq!(s.len(), 4);
+        assert_eq!(s, &[1u8, 2, 3, 4]);
+
+        // as_mut_slice: modify through slice, verify via get
+        let ms = mat.as_mut_slice();
+        ms[0] = 42;
+        assert_eq!(mat.get(0, 0, 0), Some(&42u8));
+    }
+
+    // ---- Constructor variants ----
+
+    #[test]
+    fn test_zeros_from_size_and_ones_from_size() {
+        use crate::core::Size;
+
+        let sz = Size::new(4usize, 3usize); // width=4, height=3
+        let z = Matrix::<f32>::zeros_from_size(sz, 1);
+        assert_eq!(z.rows, 3);
+        assert_eq!(z.cols, 4);
+        assert_eq!(z.channels, 1);
+        assert_eq!(z.data.len(), 12);
+        assert!(z.data.iter().all(|&v| v == 0.0));
+
+        let sz2 = Size::new(2usize, 2usize);
+        let o = Matrix::<u8>::ones_from_size(sz2, 3);
+        assert_eq!(o.rows, 2);
+        assert_eq!(o.cols, 2);
+        assert_eq!(o.channels, 3);
+        assert_eq!(o.data.len(), 12);
+        assert!(o.data.iter().all(|&v| v == 1));
+    }
+
+    // ---- with_type error cases ----
+
+    #[test]
+    fn test_zeros_with_type_error() {
+        // depth mismatch: u8 matrix with f32 MatType
+        let err = Matrix::<u8>::zeros_with_type(4, 4, CV_32FC1);
+        assert!(matches!(
+            err,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_ones_with_type_error() {
+        // depth mismatch: f32 matrix with u8 MatType
+        let err = Matrix::<f32>::ones_with_type(4, 4, CV_8UC1);
+        assert!(matches!(
+            err,
+            Err(crate::core::error::PureCvError::InvalidInput(_))
+        ));
+    }
+
+    // ---- dims_match ----
+
+    #[test]
+    fn test_dims_match() {
+        let a = Matrix::<u8>::new(4, 4, 3);
+        let b = Matrix::<u8>::new(4, 4, 3);
+        let c = Matrix::<u8>::new(4, 4, 1);
+        let d = Matrix::<f32>::new(2, 4, 3); // different type, same dims as a
+
+        assert!(a.dims_match(&b));
+
+        // different channels
+        assert!(!a.dims_match(&c));
+
+        // different rows — Matrix<f32> vs Matrix<u8>, dims_match is generic over U
+        assert!(!a.dims_match(&d));
+
+        // single-element matrix matches itself
+        let e = Matrix::<i32>::new(1, 1, 1);
+        assert!(e.dims_match(&e.clone()));
+    }
+
+    // ---- create no-op branch ----
+
+    #[test]
+    fn test_create_noop() {
+        let mut mat = Matrix::<u8>::from_vec(2, 3, 1, vec![1, 2, 3, 4, 5, 6]);
+
+        // Calling create with the same dims must not reallocate (data preserved)
+        mat.create(2, 3, 1);
+        assert_eq!(mat.rows, 2);
+        assert_eq!(mat.cols, 3);
+        assert_eq!(mat.channels, 1);
+        assert_eq!(mat.data, vec![1u8, 2, 3, 4, 5, 6], "data must be unchanged");
+
+        // Calling create with different dims resets to default
+        mat.create(1, 2, 2);
+        assert_eq!(mat.rows, 1);
+        assert_eq!(mat.cols, 2);
+        assert_eq!(mat.channels, 2);
+        assert_eq!(mat.data, vec![0u8; 4], "data must be zeroed after resize");
+    }
+
+    // ---- Matrix scalar constructor tests ----
+
+    #[test]
+    fn test_matrix_new_with_scalar_1ch() {
+        let s = Scalar::new(42u8, 0u8, 0u8, 0u8);
+        let m = Matrix::new_with_scalar(2, 3, 1, s);
+        assert_eq!(m.rows, 2);
+        assert_eq!(m.cols, 3);
+        assert_eq!(m.channels, 1);
+        assert!(m.data.iter().all(|&v| v == 42));
+    }
+
+    #[test]
+    fn test_matrix_new_with_scalar_3ch() {
+        let s = Scalar::new(10u8, 20u8, 30u8, 0u8);
+        let m = Matrix::new_with_scalar(1, 2, 3, s);
+        // pixel (0,0): [10,20,30]  pixel (0,1): [10,20,30]
+        assert_eq!(m.data, vec![10, 20, 30, 10, 20, 30]);
+    }
+
+    #[test]
+    fn test_matrix_new_with_scalar_channels_beyond_4() {
+        let s = Scalar::new(1u8, 2u8, 3u8, 4u8);
+        let m = Matrix::new_with_scalar(1, 1, 6, s);
+        // channels 4 and 5 default to 0
+        assert_eq!(m.data, vec![1, 2, 3, 4, 0, 0]);
+    }
+
+    #[test]
+    fn test_matrix_new_with_scalar_from_size() {
+        use crate::core::Size;
+        let s = Scalar::new(7u8, 8u8, 9u8, 0u8);
+        let m = Matrix::new_with_scalar_from_size(Size::new(3usize, 2usize), 3, s);
+        assert_eq!(m.rows, 2);
+        assert_eq!(m.cols, 3);
+        assert_eq!(m.channels, 3);
+        assert_eq!(m.data.len(), 2 * 3 * 3);
+    }
+
+    #[test]
+    fn test_matrix_new_with_scalar_typed_from_size_ok() {
+        use crate::core::matrix::{CV_32FC1, CV_8UC3};
+        use crate::core::Size;
+
+        let s = Scalar::new(128u8, 64u8, 32u8, 0u8);
+        let m =
+            Matrix::<u8>::new_with_scalar_typed_from_size(Size::new(4usize, 4usize), CV_8UC3, s)
+                .unwrap();
+        assert_eq!(m.rows, 4);
+        assert_eq!(m.cols, 4);
+        assert_eq!(m.channels, 3);
+        // spot-check first pixel
+        assert_eq!(m.data[0], 128);
+        assert_eq!(m.data[1], 64);
+        assert_eq!(m.data[2], 32);
+
+        let sf = Scalar::new(1.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let mf =
+            Matrix::<f32>::new_with_scalar_typed_from_size(Size::new(2usize, 2usize), CV_32FC1, sf)
+                .unwrap();
+        assert_eq!(mf.channels, 1);
+        assert!(mf.data.iter().all(|&v| v == 1.0));
+    }
+
+    #[test]
+    fn test_matrix_new_with_scalar_typed_from_size_depth_mismatch() {
+        use crate::core::matrix::CV_32FC1;
+        use crate::core::Size;
+
+        // u8 matrix but CV_32FC1 (f32 depth) → error
+        let s = Scalar::new(0u8, 0u8, 0u8, 0u8);
+        let result =
+            Matrix::<u8>::new_with_scalar_typed_from_size(Size::new(2usize, 2usize), CV_32FC1, s);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_matrix_set_to() {
+        let mut m = Matrix::<u8>::zeros(2, 2, 3);
+        m.set_to(Scalar::new(10u8, 20u8, 30u8, 0u8));
+        // every pixel should be [10, 20, 30]
+        for i in (0..m.data.len()).step_by(3) {
+            assert_eq!(m.data[i], 10);
+            assert_eq!(m.data[i + 1], 20);
+            assert_eq!(m.data[i + 2], 30);
+        }
+    }
+
+    #[test]
+    fn test_matrix_set_to_masked_ok() {
+        let mut m = Matrix::<u8>::zeros(2, 2, 1);
+        // mask: only (0,0) and (1,1) are non-zero
+        let mask = Matrix::from_vec(2, 2, 1, vec![1u8, 0u8, 0u8, 1u8]);
+        m.set_to_masked(Scalar::new(255u8, 0u8, 0u8, 0u8), &mask)
+            .unwrap();
+        assert_eq!(m.data, vec![255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_matrix_set_to_masked_size_mismatch() {
+        let mut m = Matrix::<u8>::zeros(3, 3, 1);
+        let mask = Matrix::from_vec(2, 2, 1, vec![1u8, 0u8, 0u8, 1u8]);
+        assert!(m
+            .set_to_masked(Scalar::new(255u8, 0u8, 0u8, 0u8), &mask)
+            .is_err());
+    }
+
+    #[test]
+    fn test_matrix_set_to_f32() {
+        let mut m = Matrix::<f32>::zeros(1, 2, 2);
+        m.set_to(Scalar::new(0.5f32, 1.5f32, 0.0f32, 0.0f32));
+        assert_eq!(m.data, vec![0.5, 1.5, 0.5, 1.5]);
     }
 }

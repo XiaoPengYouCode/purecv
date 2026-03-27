@@ -35,6 +35,7 @@
  */
 
 pub mod arithm;
+pub mod dynamic;
 pub mod error;
 pub mod matrix;
 pub mod rng;
@@ -42,6 +43,11 @@ pub(crate) mod simd;
 pub mod structural;
 pub mod types;
 pub mod utils;
+
+#[macro_use]
+pub mod macros {
+    // Re-export macro if we need to put it somewhere, or just trust #macro_export handles it
+}
 
 #[cfg(test)]
 mod tests;
@@ -54,6 +60,7 @@ pub use self::arithm::{
     polar_to_cart, reduce, set_identity, solve, solve_poly, sort, sort_idx, subtract, sum, trace,
     transform, DecompTypes, GEMM_1_T, GEMM_2_T, GEMM_3_T,
 };
+pub use self::dynamic::{DynamicData, DynamicMatrix};
 pub use self::error::{PureCvError, Result};
 pub use self::matrix::{
     DataType, Depth, MatType, Matrix, CV_16S, CV_16SC1, CV_16SC2, CV_16SC3, CV_16SC4, CV_16U,
