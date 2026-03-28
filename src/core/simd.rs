@@ -61,6 +61,13 @@
 /// Default methods are all no-ops that return immediately.  Concrete
 /// implementations for `f32`, `f64`, and `u8` override these methods
 /// when the `simd` feature is enabled.
+///
+/// # Performance
+///
+/// Element-wise operations (`add`, `sub`, `mul`, `div`) are primarily
+/// memory-bandwidth-bound with ~1.5x parallel speedup. Reduction operations
+/// (`dot`, `sum`, `norm_l2_sq`) scale to ~6x with parallel. The standout is
+/// `convert_scale_abs` which reaches ~5.3x with parallel + SIMD.
 #[allow(dead_code)]
 pub trait SimdElement: Copy + Send + Sync + 'static {
     /// Returns `true` if this type has SIMD kernel implementations
@@ -805,145 +812,6 @@ mod simd_impls {
 }
 
 // ---------------------------------------------------------------------------
-//  Standalone SIMD helpers for color conversion (u8 fixed-point)
-// ---------------------------------------------------------------------------
-
-/// Converts RGB u8 pixels to grayscale using fixed-point integer arithmetic.
-///
-/// Coefficients: R×77 + G×150 + B×29 ≈ R×0.299 + G×0.587 + B×0.114 (×256).
-/// `rgb_data` must have length `gray_data.len() * 3`.
-#[cfg(feature = "simd")]
-pub(crate) fn simd_rgb_to_gray_u8(gray_data: &mut [u8], rgb_data: &[u8]) {
-    debug_assert_eq!(rgb_data.len(), gray_data.len() * 3);
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        for (out, inp) in gray_data.iter_mut().zip(rgb_data.chunks_exact(3)) {
-            let r = inp[0] as u16;
-            let g = inp[1] as u16;
-            let b = inp[2] as u16;
-            *out = ((r * 77 + g * 150 + b * 29 + 128) >> 8) as u8;
-        }
-    });
-}
-
-/// Converts BGR u8 pixels to grayscale using fixed-point integer arithmetic.
-/// `bgr_data` must have length `gray_data.len() * 3`.
-#[cfg(feature = "simd")]
-pub(crate) fn simd_bgr_to_gray_u8(gray_data: &mut [u8], bgr_data: &[u8]) {
-    debug_assert_eq!(bgr_data.len(), gray_data.len() * 3);
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        for (out, inp) in gray_data.iter_mut().zip(bgr_data.chunks_exact(3)) {
-            let b = inp[0] as u16;
-            let g = inp[1] as u16;
-            let r = inp[2] as u16;
-            *out = ((r * 77 + g * 150 + b * 29 + 128) >> 8) as u8;
-        }
-    });
-}
-
-/// Converts RGBA u8 pixels to grayscale (alpha ignored).
-/// `rgba_data` must have length `gray_data.len() * 4`.
-#[cfg(feature = "simd")]
-pub(crate) fn simd_rgba_to_gray_u8(gray_data: &mut [u8], rgba_data: &[u8]) {
-    debug_assert_eq!(rgba_data.len(), gray_data.len() * 4);
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        for (out, inp) in gray_data.iter_mut().zip(rgba_data.chunks_exact(4)) {
-            let r = inp[0] as u16;
-            let g = inp[1] as u16;
-            let b = inp[2] as u16;
-            *out = ((r * 77 + g * 150 + b * 29 + 128) >> 8) as u8;
-        }
-    });
-}
-
-/// Converts BGRA u8 pixels to grayscale (alpha ignored).
-/// `bgra_data` must have length `gray_data.len() * 4`.
-#[cfg(feature = "simd")]
-pub(crate) fn simd_bgra_to_gray_u8(gray_data: &mut [u8], bgra_data: &[u8]) {
-    debug_assert_eq!(bgra_data.len(), gray_data.len() * 4);
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        for (out, inp) in gray_data.iter_mut().zip(bgra_data.chunks_exact(4)) {
-            let b = inp[0] as u16;
-            let g = inp[1] as u16;
-            let r = inp[2] as u16;
-            *out = ((r * 77 + g * 150 + b * 29 + 128) >> 8) as u8;
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------
-//  Standalone SIMD helpers for 3×3 derivative (interior rows)
-// ---------------------------------------------------------------------------
-
-/// Applies a pre-computed 3×3 kernel to a single-channel interior row of f32.
-///
-/// For each output pixel `x` in `[0, cols)`, reads from three source rows
-/// (`prev`, `curr`, `next`) at positions `x-1`, `x`, `x+1` and accumulates
-/// with the 9 kernel weights, then applies `scale` and `delta`.
-///
-/// `dst` must have length `cols * channels` (same as each source row).
-/// `prev`, `curr`, `next` are slices of length `(cols + 2) * channels` or more,
-/// where element `0` corresponds to column `-1` of the image.
-///
-/// This only processes the *interior* columns (1..cols-1 per channel); the
-/// caller is responsible for border pixels.
-#[cfg(feature = "simd")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn simd_deriv_3x3_row_f32(
-    dst: &mut [f32],
-    prev: &[f32],
-    curr: &[f32],
-    next: &[f32],
-    k2d: &[f64; 9],
-    channels: usize,
-    scale: f64,
-    delta: f64,
-) {
-    let cols_ch = dst.len(); // cols * channels
-    if cols_ch < 3 * channels {
-        return;
-    }
-
-    let k: [f32; 9] = [
-        (k2d[0] * scale) as f32,
-        (k2d[1] * scale) as f32,
-        (k2d[2] * scale) as f32,
-        (k2d[3] * scale) as f32,
-        (k2d[4] * scale) as f32,
-        (k2d[5] * scale) as f32,
-        (k2d[6] * scale) as f32,
-        (k2d[7] * scale) as f32,
-        (k2d[8] * scale) as f32,
-    ];
-    let d = delta as f32;
-
-    let arch = pulp::Arch::new();
-    arch.dispatch(|| {
-        // Process interior columns only: skip first and last `channels` elements
-        let start = channels;
-        let end = cols_ch - channels;
-        for i in start..end {
-            let xp = i - channels; // x-1
-            let xn = i + channels; // x+1
-            let val = prev[xp] * k[0]
-                + prev[i] * k[1]
-                + prev[xn] * k[2]
-                + curr[xp] * k[3]
-                + curr[i] * k[4]
-                + curr[xn] * k[5]
-                + next[xp] * k[6]
-                + next[i] * k[7]
-                + next[xn] * k[8]
-                + d;
-            dst[i] = val;
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------
 //  Tests
 // ---------------------------------------------------------------------------
 
@@ -1072,16 +940,6 @@ mod tests {
             let mut dst = vec![0u8; 4];
             u8::simd_add(&mut dst, &a, &b);
             assert_eq!(dst, vec![255, 255, 100, 0]);
-        }
-
-        #[test]
-        fn test_simd_rgb_to_gray() {
-            let rgb = vec![255, 0, 0, 0, 255, 0, 0, 0, 255];
-            let mut gray = vec![0u8; 3];
-            simd_rgb_to_gray_u8(&mut gray, &rgb);
-            assert_eq!(gray[0], 77);
-            assert_eq!(gray[1], 149);
-            assert_eq!(gray[2], 29);
         }
 
         #[test]

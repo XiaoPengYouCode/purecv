@@ -40,6 +40,8 @@ pub mod edge;
 pub mod filter;
 pub mod threshold;
 
+pub(crate) mod simd;
+
 #[cfg(test)]
 mod tests;
 

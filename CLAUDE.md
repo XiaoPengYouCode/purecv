@@ -51,6 +51,16 @@ Preferred scopes: `(core)` `(imgproc)` `(simd)` `(wasm)` `(parallel)`
 - PRs start from and target the `dev` branch (not `main`).
 - Keep PRs focused; one feature or fix per PR.
 
+## Module Structure Convention
+
+Each top-level module (`core/`, `imgproc/`, `features2d/`, etc.) must contain its own:
+- `tests.rs` — unit tests for that module (`#[cfg(test)] mod tests;`)
+- `simd.rs` — SIMD-accelerated helpers specific to that module (`pub(crate) mod simd;`)
+
+Keep SIMD kernels co-located with the module that uses them. The core `SimdElement`
+trait and element-wise operations stay in `src/core/simd.rs`; domain-specific kernels
+(e.g. color conversion, derivatives) belong in their respective module's `simd.rs`.
+
 ## Project Structure
 
 ```

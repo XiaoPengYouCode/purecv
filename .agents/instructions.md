@@ -20,6 +20,7 @@ You are an expert Rust systems engineer porting OpenCV (C++) to Pure Rust. The g
 - All comments, docstrings, and commit messages must be in **English**.
 - Use `Result<T, PureCvError>` for error handling instead of `panic!`.
 - Follow the structure defined in `src/core/` and `src/imgproc/`.
+- **Module structure convention:** Each top-level module (`core/`, `imgproc/`, `features2d/`, etc.) must contain its own `tests.rs` (unit tests) and `simd.rs` (SIMD helpers specific to that module). Keep SIMD kernels co-located with the module that uses them. The core `SimdElement` trait stays in `src/core/simd.rs`; domain-specific kernels belong in their respective module's `simd.rs`.
 - Create tests for every functions / type and benchmarks if possible.
 - Add HEADER.txt to every new file you create as defined in `.agents\skills\license-header-adder\SKILL.md`.
 
