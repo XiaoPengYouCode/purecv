@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 🚜 Refactor
+
+- *(simd)* Split imgproc-specific SIMD helpers (`simd_rgb_to_gray_u8`, `simd_bgr_to_gray_u8`, `simd_rgba_to_gray_u8`, `simd_bgra_to_gray_u8`, `simd_deriv_3x3_row_f32`) from `src/core/simd.rs` into new `src/imgproc/simd.rs` for better modularity.
+
+### 📚 Documentation
+
+- Add per-function `# Performance` doc comments to SIMD-accelerated functions documenting measured speedups.
+- Add unit tests for `bgr_to_gray`, `rgba_to_gray`, `bgra_to_gray`, and `deriv_3x3_row_f32` SIMD kernels.
+
 ## [0.2.0] - 2026-03-21
 
 ### 🐛 Bug Fixes
