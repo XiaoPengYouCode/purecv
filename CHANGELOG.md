@@ -2,16 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.2.1] - 2026-03-28
 
-### 🚜 Refactor
+### ⚙️ Miscellaneous Tasks
 
-- *(simd)* Split imgproc-specific SIMD helpers (`simd_rgb_to_gray_u8`, `simd_bgr_to_gray_u8`, `simd_rgba_to_gray_u8`, `simd_bgra_to_gray_u8`, `simd_deriv_3x3_row_f32`) from `src/core/simd.rs` into new `src/imgproc/simd.rs` for better modularity.
+- *(wasm)* Align workspace and npm version to 0.2.1
+
+### 🐛 Bug Fixes
+
+- *(core)* Remove redundant cast and use .copied() in DynamicMatrix
+- Linting issue
+- *(wasm)* Fix npm publish not including dist-std and dist-simd directories
 
 ### 📚 Documentation
 
-- Add per-function `# Performance` doc comments to SIMD-accelerated functions documenting measured speedups.
-- Add unit tests for `bgr_to_gray`, `rgba_to_gray`, `bgra_to_gray`, and `deriv_3x3_row_f32` SIMD kernels.
+- *(simd)* Add per-function SIMD performance documentation
+- Add module structure convention for tests.rs and simd.rs
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(core,wasm)* Replace PureCvMatrixF32/U8 with unified Mat type
+- *(core,wasm)* Add OpenCV-style MatType constructor to DynamicMatrix and Mat
+
+### 🚀 Features
+
+- *(core)* Implement Scalar improvements and Matrix scalar constructors (closes #21) (#22)
+
+### 🚜 Refactor
+
+- *(core)* Replace panic with Result in matrix type methods
+- Fix for formatting issue
+- Fix for clippy error
+- *(simd)* Split imgproc SIMD helpers into src/imgproc/simd.rs
+
+### 🧪 Testing
+
+- *(core)* Add comprehensive unit tests for Matrix API extensions
+- *(core,imgproc)* Add 28 critical unit tests for untested public APIs (#23) (#25)
 
 ## [0.2.0] - 2026-03-21
 
