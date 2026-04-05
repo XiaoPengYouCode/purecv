@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-04-05
+### Milestone 1: Core Features Enhancement
+
+### 🚀 Features
+
+- *(core)* Add extended mathematical constants CV_E, CV_LN10, and CV_SQRT2
+
 ## [0.2.2] - 2026-04-05
 
 ### ⚙️ Miscellaneous Tasks
