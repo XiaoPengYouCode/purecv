@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-04-05
+
+### ⚙️ Miscellaneous Tasks
+
+- Ignore build artifacts and target directories in worktrees
+
+### 🐛 Bug Fixes
+
+- *(core)* Gate dft_example behind fft feature in Cargo.toml
+- *(core)* Resolve lints and standardize mathematical constants
+
+### 📚 Documentation
+
+- *(core)* Add DFT and LUT usage examples
+
+### 🚀 Features
+
+- *(core)* Add OpenCV mathematical constants
+- *(core)* Implement DFT and LUT functions
+- *(core)* Expand core operations, solvers, metrics, and transforms
+
+### 🚜 Refactor
+
+- *(core)* Fix formatting
+
+### 🧪 Testing
+
+- *(core)* Add benchmarks for count_non_zero, lut, dft, get_optimal_dft_size
+
 ## [0.2.1] - 2026-03-28
 
 ### ⚙️ Miscellaneous Tasks
