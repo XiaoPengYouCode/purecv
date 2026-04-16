@@ -72,7 +72,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     for (i, line) in lines.iter().take(10).enumerate() {
         let rho = line[0];
         let theta = line[1];
-        println!("  Line {}: rho = {:.2}, theta = {:.2} radians", i, rho, theta);
+        println!(
+            "  Line {}: rho = {:.2}, theta = {:.2} radians",
+            i, rho, theta
+        );
     }
     if lines.len() > 10 {
         println!("  (and {} more...)", lines.len() - 10);
