@@ -2,7 +2,7 @@
  *  imgproc.rs
  *  purecv
  *
- *  This file is part of purecv - OpenCV.
+ *  This file is part of purecv - WebARKit.
  *
  *  purecv is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -37,6 +37,7 @@
 pub mod color;
 pub mod derivatives;
 pub mod edge;
+pub mod feature;
 pub mod filter;
 pub mod morph;
 pub mod pyramid;
@@ -55,6 +56,7 @@ pub use color::{
 };
 pub use derivatives::*;
 pub use edge::*;
+pub use feature::*;
 pub use filter::*;
 pub use morph::{dilate, erode, get_structuring_element, morphology_ex, MorphShapes, MorphTypes};
 pub use pyramid::{build_pyramid, pyr_down, pyr_up};
