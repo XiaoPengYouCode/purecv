@@ -131,7 +131,7 @@ pub fn hough_lines(
     }
 
     // Stage 3. Sort the detected lines by accumulator value descending
-    sort_buf.sort_by(|a, b| b.1.cmp(&a.1));
+    sort_buf.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Stage 4. Format output
     let mut lines = Vec::with_capacity(sort_buf.len());
@@ -452,7 +452,7 @@ pub fn hough_circles(
     }
 
     // Sort centers by votes
-    centers.sort_by(|a, b| b.2.cmp(&a.2));
+    centers.sort_by_key(|b| std::cmp::Reverse(b.2));
 
     let mut circles = Vec::new();
 
