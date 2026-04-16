@@ -86,7 +86,7 @@ pub use self::matrix::{
     CV_8SC1, CV_8SC2, CV_8SC3, CV_8SC4, CV_8U, CV_8UC1, CV_8UC2, CV_8UC3, CV_8UC4,
 };
 pub use self::metrics::{mahalanobis, psnr};
-pub use self::rng::{randn, randu, set_rng_seed};
+pub use self::rng::{rand_shuffle, randn, randu, set_rng_seed};
 pub use self::solvers::{solve_cubic, solve_quadratic};
 pub use self::types::{
     BorderTypes, NormTypes, Point, Point2d, Point2f, Point2i, Point2l, Point3, Point3d, Point3f,

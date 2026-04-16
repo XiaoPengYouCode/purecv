@@ -261,6 +261,26 @@ where
     Ok(())
 }
 
+/// Shuffles a slice randomly using the thread-local RNG.
+///
+/// Implements the Fisher-Yates shuffle algorithm.
+///
+/// # Arguments
+/// * `slice` - The slice to shuffle.
+pub fn rand_shuffle<T>(slice: &mut [T]) {
+    if slice.is_empty() {
+        return;
+    }
+    THREAD_RNG.with(|rng| {
+        let mut rng = rng.borrow_mut();
+        // Fisher-Yates shuffle
+        for i in (1..slice.len()).rev() {
+            let j = (rng.next_f64() * (i + 1) as f64) as usize;
+            slice.swap(i, j);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
