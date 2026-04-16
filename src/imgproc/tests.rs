@@ -1069,4 +1069,112 @@ mod imgproc_tests {
         assert_eq!(pyramid[1].rows, 16);
         assert_eq!(pyramid[2].rows, 8);
     }
+
+    // -------------------------------------------------------------------
+    //  Hough Transform operations
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_hough_lines() {
+        let mut data = vec![0u8; 100];
+        // Draw a diagonal line
+        for i in 0..10 {
+            data[i * 10 + i] = 255;
+        }
+        let src = Matrix::from_vec(10, 10, 1, data);
+
+        let lines = hough_lines(&src, 1.0, CV_PI / 180.0, 5, 0.0, CV_PI).unwrap();
+
+        assert!(
+            !lines.is_empty(),
+            "Hough lines failed to detect the main diagonal line"
+        );
+
+        let mut found_diag = false;
+        for line in lines {
+            let rho = line[0];
+            let theta = line[1];
+            // Diagonal line from 0,0 to 10,10 should have theta around pi/4 or 3pi/4.
+            // Using standard representation, theta ≈ 2.356 (135 degrees) and rho ≈ 0
+            if (theta - CV_PI as f32 * 0.75).abs() < 0.1 && rho.abs() < 2.0 {
+                found_diag = true;
+                break;
+            }
+        }
+        assert!(found_diag, "Did not detect the correct diagonal line");
+    }
+
+    #[test]
+    fn test_hough_lines_p() {
+        let mut data = vec![0u8; 100];
+        // Draw a horizontal line segment
+        for i in 2..8 {
+            data[5 * 10 + i] = 255;
+        }
+        let src = Matrix::from_vec(10, 10, 1, data);
+
+        let lines = hough_lines_p(&src, 1.0, CV_PI / 180.0, 3, 5.0, 2.0).unwrap();
+
+        assert!(
+            !lines.is_empty(),
+            "Hough Lines P failed to detect the line segment"
+        );
+
+        let mut found_segment = false;
+        for line in lines {
+            let (x1, y1, x2, y2) = (line[0], line[1], line[2], line[3]);
+            if y1 == 5 && y2 == 5 && (x1 - x2).abs() >= 5 {
+                found_segment = true;
+                break;
+            }
+        }
+        assert!(
+            found_segment,
+            "Did not detect the horizontal line segment correctly"
+        );
+    }
+
+    #[test]
+    fn test_hough_circles() {
+        let mut data = vec![0u8; 400];
+        // Draw a basic circle of radius 5 at center (10, 10) in a 20x20 image
+        let cx = 10;
+        let cy = 10;
+        let r = 5;
+        for y in 0..20 {
+            for x in 0..20 {
+                let dx = x as f32 - cx as f32;
+                let dy = y as f32 - cy as f32;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if (dist - r as f32).abs() < 0.5 {
+                    data[y * 20 + x] = 255;
+                }
+            }
+        }
+
+        let src = Matrix::from_vec(20, 20, 1, data);
+
+        let circles = hough_circles(&src, 1.0, 10.0, 10.0, 5.0, 3, 10).unwrap();
+
+        assert!(
+            !circles.is_empty(),
+            "Hough circles failed to detect the circle"
+        );
+
+        let mut found_circle = false;
+        for c in circles {
+            let cx_f = c[0];
+            let cy_f = c[1];
+            let r_f = c[2];
+
+            if (cx_f - 10.0).abs() < 2.0 && (cy_f - 10.0).abs() < 2.0 && (r_f - 5.0).abs() < 2.0 {
+                found_circle = true;
+                break;
+            }
+        }
+        assert!(
+            found_circle,
+            "Did not detect the circle at the correct location"
+        );
+    }
 }
