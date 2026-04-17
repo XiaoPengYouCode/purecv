@@ -1158,6 +1158,10 @@ pub fn border_wrap() -> i32 {
 pub fn border_reflect_101() -> i32 {
     4
 }
+#[wasm_bindgen(js_name = "BORDER_DEFAULT")]
+pub fn border_default() -> i32 {
+    4
+}
 
 // -- Flip codes -------------------------------------------------------------
 
