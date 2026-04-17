@@ -214,16 +214,7 @@ fn bench_imgproc(c: &mut Criterion) {
 
     // corner_harris
     c.bench_function("corner_harris_1024x1024_f32", |b| {
-        b.iter(|| {
-            corner_harris(
-                black_box(&img_f32),
-                3,
-                3,
-                0.04,
-                BorderTypes::default(),
-            )
-            .unwrap()
-        })
+        b.iter(|| corner_harris(black_box(&img_f32), 3, 3, 0.04, BorderTypes::default()).unwrap())
     });
 
     // hough_lines (Standard) - Using a smaller size for standard hough as it is slower
@@ -232,36 +223,18 @@ fn bench_imgproc(c: &mut Criterion) {
     // Add some "lines" to the image
     for i in 0..size_hough {
         img_hough.at_mut(i as i32, i as i32, 0).map(|v| *v = 255);
-        img_hough.at_mut(i as i32, (size_hough - 1 - i) as i32, 0).map(|v| *v = 255);
+        img_hough
+            .at_mut(i as i32, (size_hough - 1 - i) as i32, 0)
+            .map(|v| *v = 255);
     }
 
     c.bench_function("hough_lines_512x512", |b| {
-        b.iter(|| {
-            hough_lines(
-                black_box(&img_hough),
-                1.0,
-                CV_PI / 180.0,
-                50,
-                0.0,
-                CV_PI,
-            )
-            .unwrap()
-        })
+        b.iter(|| hough_lines(black_box(&img_hough), 1.0, CV_PI / 180.0, 50, 0.0, CV_PI).unwrap())
     });
 
     // hough_lines_p (Probabilistic)
     c.bench_function("hough_lines_p_512x512", |b| {
-        b.iter(|| {
-            hough_lines_p(
-                black_box(&img_hough),
-                1.0,
-                CV_PI / 180.0,
-                50,
-                50.0,
-                10.0,
-            )
-            .unwrap()
-        })
+        b.iter(|| hough_lines_p(black_box(&img_hough), 1.0, CV_PI / 180.0, 50, 50.0, 10.0).unwrap())
     });
 
     // hough_circles
@@ -269,12 +242,12 @@ fn bench_imgproc(c: &mut Criterion) {
         b.iter(|| {
             hough_circles(
                 black_box(&img_hough),
-                1.0, // dp
-                20.0, // min_dist
+                1.0,   // dp
+                20.0,  // min_dist
                 100.0, // param1
-                30.0, // param2
-                0, // min_radius
-                0, // max_radius
+                30.0,  // param2
+                0,     // min_radius
+                0,     // max_radius
             )
             .unwrap()
         })
