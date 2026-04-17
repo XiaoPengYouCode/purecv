@@ -45,7 +45,9 @@ use purecv::core::Matrix;
 use purecv::imgproc::color::{cvt_color, ColorConversionCode};
 use purecv::imgproc::derivatives;
 use purecv::imgproc::edge;
+use purecv::imgproc::feature;
 use purecv::imgproc::filter;
+use purecv::imgproc::hough;
 use purecv::imgproc::morph::{self, MorphShapes, MorphTypes};
 use purecv::imgproc::pyramid;
 use purecv::imgproc::threshold::{threshold, ThresholdTypes};
@@ -1384,6 +1386,281 @@ pub fn wasm_build_pyramid(
             },
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+//  Hough Transform operations (require u8 depth)
+// ---------------------------------------------------------------------------
+
+/// Standard Hough Transform for line detection.
+///
+/// Input must be a single-channel u8 binary image (e.g. Canny output).
+///
+/// * `rho`       – Distance resolution of the accumulator in pixels.
+/// * `theta`     – Angle resolution of the accumulator in radians.
+/// * `threshold` – Accumulator threshold; only lines with enough votes are returned.
+/// * `min_theta` – Minimum angle to check for lines (radians).
+/// * `max_theta` – Maximum angle to check for lines (radians).
+///
+/// Returns a `Float32Array` of flattened `[rho, theta, rho, theta, ...]` pairs.
+#[wasm_bindgen(js_name = "houghLines")]
+pub fn wasm_hough_lines(
+    src: &Mat,
+    rho: f64,
+    theta: f64,
+    threshold: i32,
+    min_theta: f64,
+    max_theta: f64,
+) -> Result<Vec<f32>, JsError> {
+    let m = require_u8(src, "houghLines")?;
+    let lines = hough::hough_lines(m, rho, theta, threshold, min_theta, max_theta)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    // Flatten Vec<[f32; 2]> → Vec<f32>
+    Ok(lines.into_iter().flat_map(|l| l.into_iter()).collect())
+}
+
+/// Probabilistic Hough Transform for line segment detection.
+///
+/// Input must be a single-channel u8 binary image (e.g. Canny output).
+///
+/// * `rho`             – Distance resolution of the accumulator in pixels.
+/// * `theta`           – Angle resolution of the accumulator in radians.
+/// * `threshold`       – Accumulator threshold.
+/// * `min_line_length` – Minimum line length; shorter segments are rejected.
+/// * `max_line_gap`    – Maximum allowed gap between points on the same line.
+///
+/// Returns an `Int32Array` of flattened `[x1, y1, x2, y2, ...]` quadruples.
+#[wasm_bindgen(js_name = "houghLinesP")]
+pub fn wasm_hough_lines_p(
+    src: &Mat,
+    rho: f64,
+    theta: f64,
+    threshold: i32,
+    min_line_length: f64,
+    max_line_gap: f64,
+) -> Result<Vec<i32>, JsError> {
+    let m = require_u8(src, "houghLinesP")?;
+    let segments = hough::hough_lines_p(m, rho, theta, threshold, min_line_length, max_line_gap)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    // Flatten Vec<[i32; 4]> → Vec<i32>
+    Ok(segments.into_iter().flat_map(|s| s.into_iter()).collect())
+}
+
+/// Hough Circle Transform (gradient method).
+///
+/// Input must be a single-channel u8 grayscale image.
+///
+/// * `dp`         – Inverse ratio of the accumulator resolution to the image resolution.
+/// * `min_dist`   – Minimum distance between the centres of detected circles.
+/// * `param1`     – Higher Canny threshold (gradient magnitude threshold).
+/// * `param2`     – Accumulator threshold for circle centres.
+/// * `min_radius` – Minimum circle radius.
+/// * `max_radius` – Maximum circle radius.
+///
+/// Returns a `Float32Array` of flattened `[cx, cy, r, cx, cy, r, ...]` triples.
+#[wasm_bindgen(js_name = "houghCircles")]
+pub fn wasm_hough_circles(
+    src: &Mat,
+    dp: f64,
+    min_dist: f64,
+    param1: f64,
+    param2: f64,
+    min_radius: i32,
+    max_radius: i32,
+) -> Result<Vec<f32>, JsError> {
+    let m = require_u8(src, "houghCircles")?;
+    let circles = hough::hough_circles(m, dp, min_dist, param1, param2, min_radius, max_radius)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    // Flatten Vec<[f32; 3]> → Vec<f32>
+    Ok(circles.into_iter().flat_map(|c| c.into_iter()).collect())
+}
+
+// ---------------------------------------------------------------------------
+//  Feature detection operations (require f32 depth)
+// ---------------------------------------------------------------------------
+
+/// Calculates eigenvalues and eigenvectors of image blocks for corner detection.
+///
+/// Returns a 6-channel f32 Mat: (λ1, λ2, x1, y1, x2, y2) per pixel.
+///
+/// * `block_size`  – Neighbourhood size (positive odd integer).
+/// * `ksize`       – Aperture size for the Sobel operator (3, 5, or −1 for Scharr).
+/// * `border_type` – Border interpolation (integer).
+#[wasm_bindgen(js_name = "cornerEigenValsAndVecs")]
+pub fn wasm_corner_eigen_vals_and_vecs(
+    src: &Mat,
+    block_size: i32,
+    ksize: i32,
+    border_type: i32,
+) -> Result<Mat, JsError> {
+    let m = require_f32(src, "cornerEigenValsAndVecs")?;
+    let bt = border_type_from_i32(border_type)?;
+    let result = feature::corner_eigen_vals_and_vecs(m, block_size, ksize, bt)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    Ok(Mat {
+        inner: DynamicMatrix {
+            data: DynamicData::F32(result),
+        },
+    })
+}
+
+/// Calculates the minimal eigenvalue of gradient covariance matrices (Shi-Tomasi).
+///
+/// Returns a single-channel f32 Mat.
+///
+/// * `block_size`  – Neighbourhood size (positive odd integer).
+/// * `ksize`       – Aperture size for the Sobel operator.
+/// * `border_type` – Border interpolation (integer).
+#[wasm_bindgen(js_name = "cornerMinEigenVal")]
+pub fn wasm_corner_min_eigen_val(
+    src: &Mat,
+    block_size: i32,
+    ksize: i32,
+    border_type: i32,
+) -> Result<Mat, JsError> {
+    let m = require_f32(src, "cornerMinEigenVal")?;
+    let bt = border_type_from_i32(border_type)?;
+    let result = feature::corner_min_eigen_val(m, block_size, ksize, bt)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    Ok(Mat {
+        inner: DynamicMatrix {
+            data: DynamicData::F32(result),
+        },
+    })
+}
+
+/// Harris corner detector.
+///
+/// Returns a single-channel f32 Mat with the Harris response.
+///
+/// * `block_size`  – Neighbourhood size (positive odd integer).
+/// * `ksize`       – Aperture size for the Sobel operator.
+/// * `k`           – Harris detector free parameter (typically 0.04–0.06).
+/// * `border_type` – Border interpolation (integer).
+#[wasm_bindgen(js_name = "cornerHarris")]
+pub fn wasm_corner_harris(
+    src: &Mat,
+    block_size: i32,
+    ksize: i32,
+    k: f64,
+    border_type: i32,
+) -> Result<Mat, JsError> {
+    let m = require_f32(src, "cornerHarris")?;
+    let bt = border_type_from_i32(border_type)?;
+    let result = feature::corner_harris(m, block_size, ksize, k, bt)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+    Ok(Mat {
+        inner: DynamicMatrix {
+            data: DynamicData::F32(result),
+        },
+    })
+}
+
+/// Determines strong corners on an image (Shi-Tomasi / Harris).
+///
+/// Returns a `Float32Array` of flattened `[x, y, x, y, ...]` pairs.
+///
+/// * `max_corners`          – Maximum number of corners (≤ 0 = unlimited).
+/// * `quality_level`        – Fraction of best response below which corners are rejected.
+/// * `min_distance`         – Minimum Euclidean distance between returned corners.
+/// * `block_size`           – Neighbourhood size for the structure tensor.
+/// * `use_harris_detector`  – Use Harris (true) or min eigenvalue (false).
+/// * `harris_k`             – Harris free parameter (only used when `use_harris_detector`).
+#[wasm_bindgen(js_name = "goodFeaturesToTrack")]
+pub fn wasm_good_features_to_track(
+    src: &Mat,
+    max_corners: i32,
+    quality_level: f64,
+    min_distance: f64,
+    block_size: i32,
+    use_harris_detector: bool,
+    harris_k: f64,
+) -> Result<Vec<f32>, JsError> {
+    let m = require_f32(src, "goodFeaturesToTrack")?;
+    let corners = feature::good_features_to_track(
+        m,
+        max_corners,
+        quality_level,
+        min_distance,
+        block_size,
+        use_harris_detector,
+        harris_k,
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+    // Flatten Vec<Point2f> → Vec<f32> [x, y, x, y, ...]
+    Ok(corners.iter().flat_map(|p| [p.x, p.y]).collect())
+}
+
+/// Refines corner locations to sub-pixel accuracy.
+///
+/// Takes a `Float32Array` of corner coordinates `[x, y, x, y, ...]` and returns
+/// the refined coordinates in the same format.
+///
+/// * `corners`    – Flattened corner coordinates (must have even length).
+/// * `win_w`      – Half-width of the search window.
+/// * `win_h`      – Half-height of the search window.
+/// * `zero_w`     – Half-width of the dead zone (−1 to disable).
+/// * `zero_h`     – Half-height of the dead zone (−1 to disable).
+/// * `max_count`  – Maximum number of iterations.
+/// * `epsilon`    – Convergence threshold.
+#[wasm_bindgen(js_name = "cornerSubPix")]
+pub fn wasm_corner_sub_pix(
+    src: &Mat,
+    corners: &[f32],
+    win_w: i32,
+    win_h: i32,
+    zero_w: i32,
+    zero_h: i32,
+    max_count: i32,
+    epsilon: f64,
+) -> Result<Vec<f32>, JsError> {
+    use purecv::core::types::{Point2f, Size2i, TermCriteria, TermType};
+
+    let m = require_f32(src, "cornerSubPix")?;
+    if corners.len() % 2 != 0 {
+        return Err(JsError::new(
+            "corners array must have even length (x, y pairs)",
+        ));
+    }
+
+    // Reconstruct Vec<Point2f> from flattened array.
+    let mut pts: Vec<Point2f> = corners
+        .chunks_exact(2)
+        .map(|c| Point2f::new(c[0], c[1]))
+        .collect();
+
+    let win_size = Size2i::new(win_w, win_h);
+    let zero_zone = Size2i::new(zero_w, zero_h);
+    let criteria = TermCriteria {
+        type_: TermType::Both,
+        max_count,
+        epsilon,
+    };
+
+    feature::corner_sub_pix(m, &mut pts, win_size, zero_zone, criteria)
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    // Flatten back to [x, y, x, y, ...]
+    Ok(pts.iter().flat_map(|p| [p.x, p.y]).collect())
+}
+
+/// Calculates a feature map for corner detection.
+///
+/// Returns a single-channel f32 Mat.
+///
+/// * `ksize`       – Aperture size for the Sobel operator.
+/// * `border_type` – Border interpolation (integer).
+#[wasm_bindgen(js_name = "preCornerDetect")]
+pub fn wasm_pre_corner_detect(src: &Mat, ksize: i32, border_type: i32) -> Result<Mat, JsError> {
+    let m = require_f32(src, "preCornerDetect")?;
+    let bt = border_type_from_i32(border_type)?;
+    let result =
+        feature::pre_corner_detect(m, ksize, bt).map_err(|e| JsError::new(&format!("{e}")))?;
+    Ok(Mat {
+        inner: DynamicMatrix {
+            data: DynamicData::F32(result),
+        },
+    })
 }
 
 // ---------------------------------------------------------------------------
