@@ -36,10 +36,12 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use purecv::core::types::BorderTypes;
-use purecv::core::{Matrix, Point2i, Size2i};
+use purecv::core::{Matrix, Point2i, Size2i, CV_PI};
 use purecv::imgproc::derivatives::{laplacian, scharr, sobel};
 use purecv::imgproc::edge::canny;
+use purecv::imgproc::feature::corner_harris;
 use purecv::imgproc::filter::{bilateral_filter, box_filter, gaussian_blur};
+use purecv::imgproc::hough::{hough_circles, hough_lines, hough_lines_p};
 use purecv::imgproc::threshold::{threshold, ThresholdTypes};
 use purecv::imgproc::{cvt_color, ColorConversionCode};
 use std::hint::black_box;
@@ -205,6 +207,74 @@ fn bench_imgproc(c: &mut Criterion) {
                 1.0,
                 0.0,
                 BorderTypes::default(),
+            )
+            .unwrap()
+        })
+    });
+
+    // corner_harris
+    c.bench_function("corner_harris_1024x1024_f32", |b| {
+        b.iter(|| {
+            corner_harris(
+                black_box(&img_f32),
+                3,
+                3,
+                0.04,
+                BorderTypes::default(),
+            )
+            .unwrap()
+        })
+    });
+
+    // hough_lines (Standard) - Using a smaller size for standard hough as it is slower
+    let size_hough = 512;
+    let mut img_hough = Matrix::<u8>::new(size_hough, size_hough, 1);
+    // Add some "lines" to the image
+    for i in 0..size_hough {
+        img_hough.at_mut(i as i32, i as i32, 0).map(|v| *v = 255);
+        img_hough.at_mut(i as i32, (size_hough - 1 - i) as i32, 0).map(|v| *v = 255);
+    }
+
+    c.bench_function("hough_lines_512x512", |b| {
+        b.iter(|| {
+            hough_lines(
+                black_box(&img_hough),
+                1.0,
+                CV_PI / 180.0,
+                50,
+                0.0,
+                CV_PI,
+            )
+            .unwrap()
+        })
+    });
+
+    // hough_lines_p (Probabilistic)
+    c.bench_function("hough_lines_p_512x512", |b| {
+        b.iter(|| {
+            hough_lines_p(
+                black_box(&img_hough),
+                1.0,
+                CV_PI / 180.0,
+                50,
+                50.0,
+                10.0,
+            )
+            .unwrap()
+        })
+    });
+
+    // hough_circles
+    c.bench_function("hough_circles_512x512", |b| {
+        b.iter(|| {
+            hough_circles(
+                black_box(&img_hough),
+                1.0, // dp
+                20.0, // min_dist
+                100.0, // param1
+                30.0, // param2
+                0, // min_radius
+                0, // max_radius
             )
             .unwrap()
         })
