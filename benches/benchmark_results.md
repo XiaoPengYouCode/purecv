@@ -11,6 +11,29 @@ All tests operate on `1024x1024` image/matrix tensors using `f32` (or `u8` depen
 
 ---
 
+## Feature Detection & Hough Transforms
+
+*Execution Date: 2026-04-17 (CET)*
+
+New benchmarks for Feature Detection and Hough Transforms. These operations are heavily compute-bound and benefit significantly from parallelism. Hough benchmarks use a `512x512` input to balance execution time and accuracy.
+
+| Benchmark / Operation              | Parallel + SIMD  |
+| :--------------------------------- | :--------------- |
+| `corner_harris_1024x1024_f32`     | 26.28 ms         |
+| `hough_lines_512x512`              | 3.58 ms          |
+| `hough_lines_p_512x512`            | 1.78 ms          |
+| `hough_circles_512x512`            | 4.51 ms          |
+
+### Analysis
+
+- **`corner_harris`**: Involves Sobel derivatives, Gaussian blurring of the covariance matrix, and the Harris response calculation. At 26ms for a 1MP image, it is highly efficient for real-time applications.
+- **Hough Transforms**:
+  - `hough_lines` (Standard) processes the full accumulator space.
+  - `hough_lines_p` (Probabilistic) is ~2x faster by sampling points, as expected.
+  - `hough_circles` uses the 2-1 Hough transform (gradient-based), achieving sub-5ms performance on 512x512 inputs.
+
+---
+
 ## New Benchmarks — count_non_zero, LUT & DFT
 
 *Execution Date: 2026-03-31 (CET)*
@@ -41,7 +64,7 @@ Three new function groups have been benchmarked: `count_non_zero`, `lut` (Look-U
 
 DFT scales as O(n² log n) for 2D transforms: 512×512 is ~8× slower than 256×256, consistent with the 4× data increase and logarithmic factor growth. `get_optimal_dft_size` is a trivial binary search (~19 ns).
 
----
+
 
 *Execution Date: 2026-03-17 (CET)*
 ---
@@ -160,8 +183,8 @@ Following the initial SIMD and Parallelization benchmarks, targeted algorithmic 
 | `sobel_3x3`                   | 22.79 ms    | 21.66 ms     | **1.87 ms**   | 1.87 ms         |
 | `scharr_x`                    | 22.76 ms    | 21.67 ms     | **1.78 ms**   | 1.85 ms         |
 | `threshold_binary`            | 1.31 ms     | 1.43 ms      | 626.70 µs     | **609.22 µs**   |
-| `cvt_color_bgr2gray`          | 2.69 ms     | †            | 617.94 µs     | **472.34 µs**   |
-| `cvt_color_rgba2gray`         | 2.64 ms     | 2.43 ms      | 676.02 µs     | **462.77 µs**   |
+| `cvt_color_bgr2gray`          | 2.69 ms     | †            | 617.94 µs     | **368.43 µs**   |
+| `cvt_color_rgba2gray`         | 2.64 ms     | 2.43 ms      | 676.02 µs     | **354.37 µs**   |
 | `gaussian_blur_3x3`           | 11.01 ms    | †            | **3.53 ms**   | 3.50 ms         |
 | `gaussian_blur_5x5`           | 15.21 ms    | 16.37 ms     | **4.30 ms**   | 4.72 ms         |
 | `laplacian_3x3`               | 45.91 ms    | 44.56 ms     | **4.41 ms**   | 4.44 ms         |
@@ -213,6 +236,8 @@ Following the initial SIMD and Parallelization benchmarks, targeted algorithmic 
 | Canny edge detect  | Parallel + SIMD   | 4.6× (multi-stage pipeline)|
 | Structural ops     | Parallel          | 5× (independent row ops)   |
 | GEMM               | Parallel          | 3.7× (compute-bound)       |
+| Feature Detection  | Parallel          | Harris Corner ~26ms (1024x1024) |
+| Hough Transform    | Parallel          | Lines ~3.6ms / Circles ~4.5ms (512x512) |
 
 *Conclusion*: Parallelism (`rayon`) is the dominant optimization for nearly all operations. SIMD (`target-cpu=native`) provides meaningful additional gains primarily for **pixel-level math** (`cvt_color`, `convert_scale_abs`) and **f32 derivative kernels** (`sobel_3x3_f32`) where the inner loop is trivially vectorizable. The `sobel_3x3_f32` SIMD path achieves the project's highest combined speedup at **22×**. For memory-bound or scatter/gather patterns, SIMD adds no benefit.
 
