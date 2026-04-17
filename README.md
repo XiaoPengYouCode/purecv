@@ -52,6 +52,8 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **Morphology:** `erode`, `dilate`, `morph_op` (supports Rect, Cross, Ellipse kernels) and `get_structuring_element`. Features a **separable SIMD fast-path** for rectangular kernels using `simd_row_min_max` and `simd_min_max_col` for `f32`, `f64`, and `u8`.
 - **Pyramids:** `pyr_down`, `pyr_up` (Gaussian 5x5 kernel), and `build_pyramid`. `pyr_down` is fully SIMD-accelerated via `simd_gaussian_5tap_h` and `simd_gaussian_5tap_v`, providing significant speedups for multi-channel images.
 - **Thresholding:** `threshold` with all 5 OpenCV-compatible types (`BINARY`, `BINARY_INV`, `TRUNC`, `TOZERO`, `TOZERO_INV`). SIMD-accelerated fast path for `u8`, `f32`, and `f64` via the `SimdElement::simd_threshold()` trait method. Works seamlessly with `parallel` feature for row-level Rayon dispatch.
+- **Feature Detection:** `corner_harris`, `corner_min_eigen_val` (Shi-Tomasi), `good_features_to_track`, `corner_sub_pix` refinement, and structure tensor computation via `corner_eigen_vals_and_vecs`. Supports both Harris and Shi-Tomasi responses with non-maximum suppression.
+- **Hough Transform:** Standard (`hough_lines`) and Probabilistic (`hough_lines_p`) line detection, plus Hough Circle Transform (`hough_circles`) using internally computed Sobel gradients. Fully parallelized via the `parallel` feature.
 
 ## 🚀 Getting Started
 
@@ -61,7 +63,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-purecv = "0.1"
+purecv = "0.2"
 ```
 
 ### Feature Flags
@@ -78,14 +80,14 @@ To enable the `ndarray` feature:
 
 ```toml
 [dependencies]
-purecv = { version = "0.1", features = ["ndarray"] }
+purecv = { version = "0.2", features = ["ndarray"] }
 ```
 
 To enable SIMD + Parallel for maximum performance:
 
 ```toml
 [dependencies]
-purecv = { version = "0.1", features = ["parallel", "simd"] }
+purecv = { version = "0.2", features = ["parallel", "simd"] }
 ```
 
 ### Usage Example
@@ -200,12 +202,15 @@ cargo run --example morphology
 
 # Gaussian pyramids (pyr_down, pyr_up)
 cargo run --example pyramids
+
+# Hough Transform (Lines and Circles detection)
+cargo run --example hough_transform
 ```
 
 ## 🧪 Testing & Benchmarking
 
 ### Running Tests
-PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **242 unit tests** covering:
+PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **255 unit tests** covering:
 
 - **Core module:** Matrix factories, scalar arithmetic variants, bitwise scalar ops, min/max, comparison ops (`compare`, `in_range`), reduction (`reduce`, `count_non_zero`), polar/cartesian conversions, linear algebra (`determinant`, `invert`, `solve`), channel ops (`extract_channel`, `insert_channel`), `DynamicMatrix`, transforms, sorting, clustering, and RNG.
 - **Imgproc module:** Filters, derivatives, edge detection, color conversions (including gray-to-RGB/BGR/RGBA/BGRA), thresholding, morphology (`erode`, `dilate`), pyramids (`pyr_down`, `pyr_up`), and kernel helpers (`get_gaussian_kernel`, `get_sobel_kernels`).
@@ -259,7 +264,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
   - [x] PR 3 — Derivatives SIMD: `fast_deriv_3x3` interior SIMD pass (`simd_deriv_3x3_row_f32`) achieving **22× speedup** on `sobel_3x3_f32`; new benchmarks for `sobel_3x3_f32_dx/dy` and `bilateral_filter`.
   - [x] PR 4 — Pyramids + Morphology SIMD: Separable 5-tap Gaussian kernels for pyramids and separable min/max kernels for rectangular morphology; new `pyramids` and `morphology` examples.
 - [x] **Phase 3: WebAssembly** - `wasm-bindgen` wrappers, `wasm-pack` build, CI matrix with `wasm32-unknown-unknown` + `simd128`.
-- [x] **Phase 4: Image Processing** - Advanced filtering, convolutions, morphology, pyramids and feature detection.
+- [x] **Phase 4: Image Processing** - Advanced filtering, convolutions, morphology, pyramids, feature detection (Harris/Shi-Tomasi), and Hough Transform.
 - [x] **Visual examples** — Load real images, apply `threshold`, `cvt_color`, `erode`/`dilate` and `pyr_down`, save PNG output (see `examples/`).
 
 ## 📄 License
