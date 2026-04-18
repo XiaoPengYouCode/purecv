@@ -88,7 +88,7 @@ function drawGray(canvasId, u8, w, h) {
     const canvas = document.getElementById(canvasId);
     canvas.width = w;
     canvas.height = h;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', "willReadFrequently: true");
     const img = ctx.createImageData(w, h);
     for (let i = 0; i < w * h; i++) {
         const v = u8[i];
@@ -105,7 +105,7 @@ function drawRGB(canvasId, u8, w, h) {
     const canvas = document.getElementById(canvasId);
     canvas.width = w;
     canvas.height = h;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', "willReadFrequently: true");
     const img = ctx.createImageData(w, h);
     for (let i = 0; i < w * h; i++) {
         img.data[i * 4] = u8[i * 3];
@@ -121,7 +121,7 @@ function drawImageData(canvasId, imageData) {
     const canvas = document.getElementById(canvasId);
     canvas.width = imageData.width;
     canvas.height = imageData.height;
-    canvas.getContext('2d').putImageData(imageData, 0, 0);
+    canvas.getContext('2d', "willReadFrequently: true").putImageData(imageData, 0, 0);
 }
 
 /** Normalize a Float32Array (abs values) to a Uint8Array [0, 255]. */
@@ -165,7 +165,7 @@ function loadImagePixels(src) {
             const offscreen = document.createElement('canvas');
             offscreen.width = img.naturalWidth;
             offscreen.height = img.naturalHeight;
-            const ctx = offscreen.getContext('2d');
+            const ctx = offscreen.getContext('2d', "willReadFrequently: true");
             ctx.drawImage(img, 0, 0);
             const rgba = ctx.getImageData(0, 0, img.naturalWidth, img.naturalHeight);
             resolve({ rgba, width: img.naturalWidth, height: img.naturalHeight });
@@ -195,10 +195,11 @@ async function run() {
 
         // Strip alpha → packed RGB u8
         const rgbU8 = new Uint8Array(width * height * 3);
-        for (let i = 0; i < width * height; i++) {
-            rgbU8[i * 3] = rgba.data[i * 4];
-            rgbU8[i * 3 + 1] = rgba.data[i * 4 + 1];
-            rgbU8[i * 3 + 2] = rgba.data[i * 4 + 2];
+        let j = 0;
+        for (let i = 0; i < rgba.data.length; i += 4) {
+            rgbU8[j++] = rgba.data[i];     // R
+            rgbU8[j++] = rgba.data[i + 1]; // G
+            rgbU8[j++] = rgba.data[i + 2]; // B
         }
 
         // Wrap in purecv matrix
