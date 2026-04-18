@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-04-18
+
+### ⚙️ Miscellaneous Tasks
+
+- *(wasm)* Add license headers to JS/HTML files and finalize benches doc
+- Upgrade project license to LGPLv3
+
+### ⚡ Performance
+
+- *(imgproc)* Add benchmarks for corner_harris and hough_transform functions
+
+### ⚡ SIMD Optimizations
+
+- *(simd)* Implement SIMD acceleration for pyramids and morphology
+
+### 🐛 Bug Fixes
+
+- *(examples)* Format println! in hough_transform.rs
+- *(benches)* Fix fromatting in imgproc_benches file
+
+### 📚 Documentation
+
+- Update READMEs and CHANGELOG for v0.2.4
+- Update README for 0.2 and add Hough Transform / Feature Detection details
+- *(bench)* Update benchmark results with hough and feature detection
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(imgproc,wasm)* Implement morphological and pyramid operations #37
+- *(wasm)* Add Hough Transform and Feature Detection bindings (#40)
+- *(wasm)* Add interactive web examples and demo environment for Hough, Feature Detection, and Pyramids (#40)
+
+### 🚀 Features
+
+- *(imgproc)* Implement corner detection pipeline — cornerSubPix, goodFeaturesToTrack, Harris, Shi-Tomasi, preCornerDetect (#39)
+- *(imgproc)* Implement Hough Transform for line and circle detection (#40)
+
+### 🚜 Refactor
+
+- *(hough)* Optimize sorting of detected lines and centers using sort_by_key
+
 ## [0.2.3] - 2026-04-05
 ### Milestone 1: Core Features Enhancement
 
