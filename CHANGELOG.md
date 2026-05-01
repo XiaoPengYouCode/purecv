@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-05-02
+
+### ⚙️ Miscellaneous Tasks
+
+- *(wasm)* Update CHANGELOG.md, README.md, and package.json to version 0.3.1
+
+### 🐛 Bug Fixes
+
+- *(video)* Fix calc_optical_flow_pyramid_lk doctest using blank image
+- *(core, benches, video)* Resolve clippy warnings for data_ptr casts and implicit saturating sub
+
+### 📚 Documentation
+
+- *(core)* Add doc-test example for Scalar::channel_or_default
+- *(video)* Improve doc comments on optical_flow example helpers
+- *(benchmarks)* Remove accidentally duplicated header from benchmark_results.md
+- *(wasm)* Fix outdated api references in readme (fixes #42)
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(wasm)* Add optical flow bindings and webcam demo
+- *(wasm)* Expose data_ptr, copy_to, and VecN to JS bindings
+
+### 🚀 Features
+
+- *(core)* Add generic N-dimensional VecN type
+- *(core)* Add VecN::new() constructors and Add/Sub<Scalar> for VecN
+- *(core)* Add vecn_ops example demonstrating VecN type
+- *(core)* Add data_ptr, data_ptr_mut, and copy_to to Matrix<T>
+- *(video)* Implement buildOpticalFlowPyramid and calcOpticalFlowPyrLK
+- *(video)* Add optical_flow example using real image (butterfly.jpg)
+- *(video)* Add multi-frame optical flow example with GIF input
+- *(video)* Add parallel and SIMD support to optical flow functions
+
+### 🚜 Refactor
+
+- *(core)* Extract Scalar::channel_or_default, rename verbose test
+
+### 🧪 Testing
+
+- *(video)* Add optical flow benchmarks and update documentation
+
 ## [0.3.0] - 2026-04-18
 
 ### ⚙️ Miscellaneous Tasks

@@ -1,6 +1,6 @@
 [package]
 name = "purecv"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Walter Perdan <https://github.com/kalwalt>"]
 edition = "2021"
 description = "A pure Rust, high-performance computer vision library focused on safety and portability."
@@ -76,7 +76,7 @@ panic = "abort"
 members = ["crates/wasm"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Walter Perdan <https://github.com/kalwalt>"]
 edition = "2021"
 description = "A pure Rust, high-performance computer vision library focused on safety and portability."
