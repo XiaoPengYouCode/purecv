@@ -318,7 +318,10 @@ pub(super) struct Lcg {
 }
 
 impl Lcg {
-    /// Create a new generator from `seed` (odd values improve quality).
+    /// Create a new generator from `seed`.
+    ///
+    /// The LSB of `seed` is forced to 1 to guarantee the state is odd,
+    /// which improves the statistical quality of the LCG output.
     pub(super) fn new(seed: u64) -> Self {
         Self { state: seed | 1 }
     }
