@@ -44,10 +44,13 @@ pub mod video;
 
 /// Prelude to easily import common structures
 pub mod prelude {
+    pub use crate::calib3d::{
+        find_homography, rodrigues, solve_pnp, solve_pnp_ransac, HomographyMethod, SolvePnPMethod,
+    };
     pub use crate::core::types::{
-        BorderTypes, Point2f, Point2i, Rect2f, Rect2i, Scalar, Size2f, Size2i, TermCriteria,
-        TermType, Vec2b, Vec2d, Vec2f, Vec2i, Vec2s, Vec3b, Vec3d, Vec3f, Vec3i, Vec3s, Vec4b,
-        Vec4d, Vec4f, Vec4i, Vec4s, Vec6d, Vec6f, VecN,
+        BorderTypes, Point2f, Point2i, Point3f, Rect2f, Rect2i, Scalar, Size2f, Size2i,
+        TermCriteria, TermType, Vec2b, Vec2d, Vec2f, Vec2i, Vec2s, Vec3b, Vec3d, Vec3f, Vec3i,
+        Vec3s, Vec4b, Vec4d, Vec4f, Vec4i, Vec4s, Vec6d, Vec6f, VecN,
     };
     pub use crate::core::Matrix;
     pub use crate::imgproc::derivatives::{laplacian, scharr, sobel};

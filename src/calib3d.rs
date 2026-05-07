@@ -1,5 +1,5 @@
 /*
- *  mod.rs
+ *  calib3d.rs
  *  purecv
  *
  *  This file is part of purecv - WebARKit.
@@ -34,20 +34,41 @@
  *
  */
 
-//! Camera calibration and 3D geometry module.
+//! Camera calibration and 3-D geometry — the `calib3d` module.
 //!
-//! This module mirrors OpenCV's `calib3d` module structure and is the home for
-//! Milestone 4 APIs such as:
-//! - `find_homography`
-//! - `rodrigues`
-//! - `solve_pnp`
-//! - `solve_pnp_ransac`
+//! This module mirrors the structure of [OpenCV's `calib3d` module][ocv] and
+//! implements the following **Milestone 4** APIs in pure Rust:
 //!
-//! Implementations in this module follow the project architectural rules:
-//! pure Rust, safe memory handling, and feature-gated optimizations.
+//! | Function | Description |
+//! |----------|-------------|
+//! | [`find_homography`] | Compute a perspective homography from point correspondences |
+//! | [`rodrigues`]       | Convert between rotation vector and rotation matrix |
+//! | [`solve_pnp`]       | Estimate camera pose from 3-D / 2-D correspondences |
+//! | [`solve_pnp_ransac`]| Robust pose estimation with RANSAC |
+//!
+//! # Conventions
+//!
+//! All functions follow the standard OpenCV coordinate convention (right-hand,
+//! z-axis pointing away from the camera) and accept `f64` matrices
+//! (`Matrix<f64>`) or point-slice inputs (`&[Point2f]`, `&[Point3f]`).
+//!
+//! [ocv]: https://docs.opencv.org/4.10.0/d9/d0c/group__calib3d.html
+
+pub mod geometry;
+pub mod homography;
+pub(crate) mod linalg;
+pub mod pose;
 
 #[cfg(feature = "simd")]
 pub(crate) mod simd;
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Re-exports
+// ---------------------------------------------------------------------------
+
+pub use geometry::rodrigues;
+pub use homography::{find_homography, HomographyMethod};
+pub use pose::{solve_pnp, solve_pnp_ransac, SolvePnPMethod};
