@@ -1,5 +1,5 @@
 /*
- *  calib3d.rs
+ *  tests.rs
  *  purecv
  *
  *  This file is part of purecv - WebARKit.
@@ -34,6 +34,11 @@
  *
  */
 
-//! Camera calibration and 3D geometry module.
-//!
-//! This module mirrors OpenCV's `calib3d` module structure.
+#[cfg(test)]
+mod calib3d_tests {
+    #[test]
+    fn test_calib3d_module_scaffold_present() {
+        // Placeholder test to keep module test structure in place.
+        assert!(true);
+    }
+}
