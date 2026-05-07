@@ -132,9 +132,11 @@ pub fn solve_pnp(
         ));
     }
     if object_points.len() != image_points.len() {
-        return Err(PureCvError::InvalidInput(
-            "object_points and image_points must have the same length".to_string(),
-        ));
+        return Err(PureCvError::InvalidInput(format!(
+            "object_points ({}) and image_points ({}) must have the same length",
+            object_points.len(),
+            image_points.len()
+        )));
     }
     if camera_matrix.rows != 3 || camera_matrix.cols != 3 || camera_matrix.channels != 1 {
         return Err(PureCvError::InvalidInput(
@@ -230,9 +232,11 @@ pub fn solve_pnp_ransac(
         ));
     }
     if object_points.len() != image_points.len() {
-        return Err(PureCvError::InvalidInput(
-            "object_points and image_points must have the same length".to_string(),
-        ));
+        return Err(PureCvError::InvalidInput(format!(
+            "object_points ({}) and image_points ({}) must have the same length",
+            object_points.len(),
+            image_points.len()
+        )));
     }
 
     let _ = confidence; // Adaptive iteration count not yet implemented.
@@ -425,7 +429,7 @@ fn reproject_sign(r: &[f64; 9], t: &[f64; 3], pts: &[Point3f]) -> i32 {
 // Gauss-Newton refinement
 // ---------------------------------------------------------------------------
 
-/// Refine pose `(R, t)` by minimising the sum of squared reprojection errors
+/// Refine pose `(R, t)` by minimizing the sum of squared reprojection errors
 /// in normalised image coordinates using the Gauss-Newton method.
 fn gauss_newton_refine(
     norm_pts: &[Point2f],
@@ -714,7 +718,9 @@ fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Vec<Point2f> {
         .collect()
 }
 
-/// Approximate rotation-matrix → Rodrigues vector (fast, for GN initialisation).
+/// Convert rotation matrix → Rodrigues vector for use as a Gauss-Newton
+/// initialiser.  Returns the same result as `geometry::rmat_to_rvec`, but
+/// inlined here to avoid a cross-module call in the hot refinement loop.
 fn rmat_to_rvec_approx(r: &[f64; 9]) -> [f64; 3] {
     // Use the same formula as geometry::rmat_to_rvec.
     let trace_val = ((r[0] + r[4] + r[8] - 1.0) * 0.5).clamp(-1.0, 1.0);

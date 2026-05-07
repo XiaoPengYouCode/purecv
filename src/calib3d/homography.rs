@@ -117,9 +117,11 @@ pub fn find_homography(
         ));
     }
     if src_points.len() != dst_points.len() {
-        return Err(PureCvError::InvalidInput(
-            "src_points and dst_points must have the same length".to_string(),
-        ));
+        return Err(PureCvError::InvalidInput(format!(
+            "src_points ({}) and dst_points ({}) must have the same length",
+            src_points.len(),
+            dst_points.len()
+        )));
     }
 
     match method {
@@ -181,9 +183,12 @@ fn dlt_homography(src: &[Point2f], dst: &[Point2f]) -> Result<Matrix<f64>> {
 
     // --- Null-space → vectorized H in normalized coordinates ---
     let h_vec = null_space_vector(&a, 2 * n, 9);
-    let h_norm: [f64; 9] = h_vec
-        .try_into()
-        .map_err(|_| PureCvError::InternalError("null_space_vector length mismatch".into()))?;
+    let h_norm: [f64; 9] = h_vec.try_into().map_err(|v: Vec<f64>| {
+        PureCvError::InternalError(format!(
+            "null_space_vector: expected 9 elements, got {}",
+            v.len()
+        ))
+    })?;
 
     // --- Denormalize: H = T2^{-1} * H_norm * T1 ---
     let t2_inv = mat3_inv(&t2)

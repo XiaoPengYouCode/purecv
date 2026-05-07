@@ -116,9 +116,10 @@ pub fn rodrigues(src: &Matrix<f64>, dst: &mut Matrix<f64>) -> Result<()> {
 ///
 /// Uses the Rodrigues formula:
 /// ```text
-/// R = cos(θ)·I  +  (1 − cos(θ))·k·kᵀ  +  sin(θ)·[k]×
+/// R = cos(θ)·I  +  (1 − cos(θ))·k·kᵀ  +  sin(θ)·K_×
 /// ```
-/// where `θ = ‖r‖` and `k = r / θ`.
+/// where `θ = ‖r‖`, `k = r / θ`, and `K_×` is the skew-symmetric
+/// (cross-product) matrix of `k`.
 pub(super) fn rvec_to_rmat(rx: f64, ry: f64, rz: f64) -> [f64; 9] {
     let theta = (rx * rx + ry * ry + rz * rz).sqrt();
 
