@@ -195,16 +195,22 @@ Explore the capabilities of PureCV by running the provided examples:
 # Basic matrix arithmetic
 cargo run --example arithmetic
 
+# Vector types and multi-channel operations
+cargo run --example vecn_ops
+
 # Structural operations (flip, rotate, split/merge)
 cargo run --example structural_ops
 
 # Color conversion (RGB to Grayscale)
 cargo run --example color_conversion
 
-# Thresholding — all 5 types (BINARY, BINARY_INV, TRUNC, TOZERO, TOZERO_INV)
+# Lookup Table (LUT) transformations
+cargo run --example lut_example
+
+# Thresholding — all 5 types
 cargo run --example threshold
 
-# Image filters (blur, gaussian, canny, sobel, …) — requires examples/data/butterfly.jpg
+# Image filters (blur, gaussian, canny, sobel, …)
 cargo run --example filters
 
 # Morphological operations (erode, dilate, morph_op)
@@ -215,6 +221,16 @@ cargo run --example pyramids
 
 # Hough Transform (Lines and Circles detection)
 cargo run --example hough_transform
+
+# Corner Detection (Harris, Shi-Tomasi, Sub-pixel refinement)
+cargo run --example corner_detection
+
+# Discrete Fourier Transform (DFT)
+cargo run --example dft_example
+
+# Optical Flow (Pyramidal Lucas-Kanade)
+cargo run --example optical_flow
+cargo run --example optical_flow_video
 
 # Pose Estimation (solve_pnp and rodrigues)
 cargo run --example pose_estimation
