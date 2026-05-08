@@ -111,17 +111,17 @@ pub fn find_homography(
     mask: Option<&mut Vec<u8>>,
 ) -> Result<Matrix<f64>> {
     let n = src_points.len();
-    if n < 4 || dst_points.len() < n {
-        return Err(PureCvError::InvalidInput(
-            "find_homography requires at least 4 matching point pairs".to_string(),
-        ));
-    }
     if src_points.len() != dst_points.len() {
         return Err(PureCvError::InvalidInput(format!(
             "src_points ({}) and dst_points ({}) must have the same length",
             src_points.len(),
             dst_points.len()
         )));
+    }
+    if n < 4 {
+        return Err(PureCvError::InvalidInput(
+            "find_homography requires at least 4 matching point pairs".to_string(),
+        ));
     }
 
     match method {

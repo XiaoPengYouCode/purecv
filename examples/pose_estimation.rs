@@ -69,6 +69,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             y: 5.0,
             z: 0.0,
         },
+        Point3f {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+        Point3f {
+            x: 0.0,
+            y: 5.0,
+            z: 0.0,
+        },
     ];
 
     // Simulate where these corners might project in the image
@@ -78,6 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Point2f { x: 380.0, y: 185.0 },
         Point2f { x: 390.0, y: 300.0 },
         Point2f { x: 250.0, y: 290.0 },
+        Point2f { x: 320.0, y: 240.0 },
+        Point2f { x: 320.0, y: 295.0 },
     ];
 
     // Define Camera Matrix (640x480 resolution, fx=fy=500, cx=320, cy=240)
@@ -88,23 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![500.0, 0.0, 320.0, 0.0, 500.0, 240.0, 0.0, 0.0, 1.0],
     );
 
-    // Initialize rvec and tvec with a slightly off guess
-    let mut rvec = Matrix::<f64>::from_vec(
-        3,
-        1,
-        1,
-        vec![0.1, -0.1, 0.0], // guess for rotation
-    );
-    let mut tvec = Matrix::<f64>::from_vec(
-        3,
-        1,
-        1,
-        vec![0.0, 0.0, 20.0], // guess for translation (z=20)
-    );
-
-    println!("[1] Initial Extrinsic Guess:");
-    println!("rvec guess: {:?}", rvec.data);
-    println!("tvec guess: {:?}", tvec.data);
+    // Initialize rvec and tvec
+    let mut rvec = Matrix::<f64>::new(3, 1, 1);
+    let mut tvec = Matrix::<f64>::new(3, 1, 1);
 
     // 2. Solve PnP
     println!("\n[2] Solving PnP (Iterative Method)...");
@@ -115,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None, // No distortion coeffs
         &mut rvec,
         &mut tvec,
-        true, // use_extrinsic_guess
+        false, // use_extrinsic_guess
         SolvePnPMethod::Iterative,
     )?;
 
