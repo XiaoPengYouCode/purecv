@@ -123,14 +123,9 @@ pub fn solve_pnp(
     rvec: &mut Matrix<f64>,
     tvec: &mut Matrix<f64>,
     use_extrinsic_guess: bool,
-    _flags: SolvePnPMethod,
+    flags: SolvePnPMethod,
 ) -> Result<bool> {
     let n = object_points.len();
-    if n < 4 || image_points.len() < n {
-        return Err(PureCvError::InvalidInput(
-            "solve_pnp requires at least 4 point correspondences".to_string(),
-        ));
-    }
     if object_points.len() != image_points.len() {
         return Err(PureCvError::InvalidInput(format!(
             "object_points ({}) and image_points ({}) must have the same length",
@@ -138,19 +133,34 @@ pub fn solve_pnp(
             image_points.len()
         )));
     }
+    if n < 6 {
+        return Err(PureCvError::InvalidInput(
+            "solve_pnp requires at least 6 point correspondences for DLT".to_string(),
+        ));
+    }
+    if flags != SolvePnPMethod::Iterative {
+        return Err(PureCvError::NotImplemented(
+            "Only Iterative method is supported".to_string(),
+        ));
+    }
     if camera_matrix.rows != 3 || camera_matrix.cols != 3 || camera_matrix.channels != 1 {
         return Err(PureCvError::InvalidInput(
-            "camera_matrix must be a 3×3 single-channel matrix".to_string(),
+            "camera_matrix must be a 3x3 single-channel matrix".to_string(),
         ));
     }
 
     let _ = dist_coeffs; // Distortion correction not yet implemented.
+    if use_extrinsic_guess {
+        return Err(PureCvError::NotImplemented(
+            "use_extrinsic_guess is not supported yet".to_string(),
+        ));
+    }
 
     // Extract K entries.
     let k = extract_k(camera_matrix)?;
 
     // Undistort image points (only pin-hole in this release).
-    let norm_pts = undistort_points(image_points, &k);
+    let norm_pts = undistort_points(image_points, &k)?;
 
     // DLT initial estimate.
     let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
@@ -218,19 +228,14 @@ pub fn solve_pnp_ransac(
     dist_coeffs: Option<&[f64]>,
     rvec: &mut Matrix<f64>,
     tvec: &mut Matrix<f64>,
-    _use_extrinsic_guess: bool,
+    use_extrinsic_guess: bool,
     iterations_count: i32,
     reproj_threshold: f32,
     confidence: f64,
     inliers: Option<&mut Vec<i32>>,
-    _flags: SolvePnPMethod,
+    flags: SolvePnPMethod,
 ) -> Result<bool> {
     let n = object_points.len();
-    if n < 4 || image_points.len() < n {
-        return Err(PureCvError::InvalidInput(
-            "solve_pnp_ransac requires at least 4 point correspondences".to_string(),
-        ));
-    }
     if object_points.len() != image_points.len() {
         return Err(PureCvError::InvalidInput(format!(
             "object_points ({}) and image_points ({}) must have the same length",
@@ -238,16 +243,39 @@ pub fn solve_pnp_ransac(
             image_points.len()
         )));
     }
+    if n < 6 {
+        return Err(PureCvError::InvalidInput(
+            "solve_pnp_ransac requires at least 6 point correspondences".to_string(),
+        ));
+    }
+    if flags != SolvePnPMethod::Iterative {
+        return Err(PureCvError::NotImplemented(
+            "Only Iterative method is supported".to_string(),
+        ));
+    }
+    if use_extrinsic_guess {
+        return Err(PureCvError::NotImplemented(
+            "use_extrinsic_guess is not supported in ransac yet".to_string(),
+        ));
+    }
 
     let _ = confidence; // Adaptive iteration count not yet implemented.
     let _ = dist_coeffs; // Distortion correction not yet implemented.
 
-    let max_iters = iterations_count.max(1) as usize;
-    let thr = reproj_threshold as f64;
-    let thr2 = thr * thr;
-
     let k = extract_k(camera_matrix)?;
-    let norm_pts = undistort_points(image_points, &k);
+    let norm_pts = undistort_points(image_points, &k)?;
+
+    let max_iters = iterations_count.max(1) as usize;
+    let fx = k[0];
+    let fy = k[4];
+    let f_avg = (fx + fy) / 2.0;
+    if f_avg.abs() < 1e-12 {
+        return Err(PureCvError::InvalidInput(
+            "Invalid focal length in camera_matrix".to_string(),
+        ));
+    }
+    let thr = reproj_threshold as f64 / f_avg;
+    let thr2 = thr * thr;
 
     let mut rng = Lcg::new(0x1234_5678_9abc_def0);
     let mut best_count = 0usize;
@@ -257,7 +285,7 @@ pub fn solve_pnp_ransac(
     let mut found = false;
 
     for _ in 0..max_iters {
-        let idx = sample_no_replace(&mut rng, n, 4);
+        let idx = sample_no_replace(&mut rng, n, 6);
         let s_obj: Vec<Point3f> = idx.iter().map(|&i| object_points[i]).collect();
         let s_img: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
 
@@ -283,7 +311,7 @@ pub fn solve_pnp_ransac(
         }
     }
 
-    if !found || best_count < 4 {
+    if !found || best_count < 6 {
         return Ok(false);
     }
 
@@ -688,34 +716,32 @@ fn extract_k(camera_matrix: &Matrix<f64>) -> Result<[f64; 9]> {
 }
 
 /// Apply K^{-1} to image points to obtain normalised camera coordinates.
-fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Vec<Point2f> {
-    let k_inv = mat3_inv(k);
-    image_points
+fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Result<Vec<Point2f>> {
+    let ki = mat3_inv(k)
+        .ok_or_else(|| PureCvError::InvalidInput("camera_matrix is singular".to_string()))?;
+
+    Ok(image_points
         .iter()
         .map(|p| {
-            if let Some(ki) = k_inv {
-                let x = p.x as f64;
-                let y = p.y as f64;
-                let w = ki[6] * x + ki[7] * y + ki[8];
-                let xn = if w.abs() > 1e-12 {
-                    (ki[0] * x + ki[1] * y + ki[2]) / w
-                } else {
-                    0.0
-                };
-                let yn = if w.abs() > 1e-12 {
-                    (ki[3] * x + ki[4] * y + ki[5]) / w
-                } else {
-                    0.0
-                };
-                Point2f {
-                    x: xn as f32,
-                    y: yn as f32,
-                }
+            let x = p.x as f64;
+            let y = p.y as f64;
+            let w = ki[6] * x + ki[7] * y + ki[8];
+            let xn = if w.abs() > 1e-12 {
+                (ki[0] * x + ki[1] * y + ki[2]) / w
             } else {
-                *p
+                0.0
+            };
+            let yn = if w.abs() > 1e-12 {
+                (ki[3] * x + ki[4] * y + ki[5]) / w
+            } else {
+                0.0
+            };
+            Point2f {
+                x: xn as f32,
+                y: yn as f32,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Convert rotation matrix → Rodrigues vector for use as a Gauss-Newton

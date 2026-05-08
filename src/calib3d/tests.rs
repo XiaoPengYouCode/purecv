@@ -352,9 +352,9 @@ mod calib3d_tests {
                 y: 0.0,
                 z: 0.0
             };
-            3
+            5
         ];
-        let img = vec![Point2f { x: 0.0, y: 0.0 }; 3];
+        let img = vec![Point2f { x: 0.0, y: 0.0 }; 5];
         let mut rv = Matrix::<f64>::new(1, 1, 1);
         let mut tv = Matrix::<f64>::new(1, 1, 1);
         assert!(solve_pnp(
