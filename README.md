@@ -59,6 +59,12 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 ### `purecv-video`
 - **Optical Flow:** Pyramidal Lucas-Kanade optical flow implementation with `calc_optical_flow_pyr_lk` and `build_optical_flow_pyramid`. Includes robust window-based tracking, sub-pixel accuracy, spatial gradient optimization, and iterative refinement.
 
+### `purecv-calib3d`
+- **Pose Estimation:** Camera pose estimation using `solve_pnp` (Iterative) and `solve_pnp_ransac`.
+- **Homography:** Direct Linear Transformation (DLT) and RANSAC-based `find_homography` for robust planar perspective mapping.
+- **Geometry:** `rodrigues` for converting between rotation vectors and 3x3 rotation matrices.
+- **Linear Algebra Utilities:** Jacobi SVD, null-space solver, 3x3 matrix helpers, and an LCG RNG.
+
 ## 🚀 Getting Started
 
 ### Installation
@@ -209,16 +215,20 @@ cargo run --example pyramids
 
 # Hough Transform (Lines and Circles detection)
 cargo run --example hough_transform
+
+# Pose Estimation (solve_pnp and rodrigues)
+cargo run --example pose_estimation
 ```
 
 ## 🧪 Testing & Benchmarking
 
 ### Running Tests
-PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **255 unit tests** covering:
+PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **259 unit tests** covering:
 
 - **Core module:** Matrix factories, scalar arithmetic variants, bitwise scalar ops, min/max, comparison ops (`compare`, `in_range`), reduction (`reduce`, `count_non_zero`), polar/cartesian conversions, linear algebra (`determinant`, `invert`, `solve`), channel ops (`extract_channel`, `insert_channel`), `DynamicMatrix`, transforms, sorting, clustering, and RNG.
 - **Imgproc module:** Filters, derivatives, edge detection, color conversions (including gray-to-RGB/BGR/RGBA/BGRA), thresholding, morphology (`erode`, `dilate`), pyramids (`pyr_down`, `pyr_up`), and kernel helpers (`get_gaussian_kernel`, `get_sobel_kernels`).
 - **Video module:** Tracking and optical flow capabilities including `calc_optical_flow_pyr_lk` and `build_optical_flow_pyramid` implementations.
+- **Calib3d module:** SVD, homography estimation, pose estimation (`solve_pnp`), and `rodrigues`.
 
 ```bash
 # Run all tests
