@@ -409,6 +409,13 @@ impl DynamicMatrix {
         }
     }
 
+    pub fn as_matrix_f64_mut(&mut self) -> Option<&mut Matrix<f64>> {
+        match &mut self.data {
+            DynamicData::F64(m) => Some(m),
+            _ => None,
+        }
+    }
+
     // -- Read a single element as f64 (for JS interop) -----------------------
 
     /// Returns the element at `(row, col, channel)` cast to `f64`.

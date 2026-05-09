@@ -124,7 +124,28 @@ fn require_u8<'a>(mat: &'a Mat, op_name: &str) -> Result<&'a Matrix<u8>, JsError
     })
 }
 
-#[wasm_bindgen(js_name = "Mat")]
+/// Internal helper: require f64 depth, return `&Matrix<f64>` or a JsError.
+fn require_f64<'a>(mat: &'a Mat, op_name: &str) -> Result<&'a Matrix<f64>, JsError> {
+    mat.inner.as_matrix_f64().ok_or_else(|| {
+        JsError::new(&format!(
+            "{op_name} requires f64 depth, but Mat has depth '{}'",
+            mat.inner.depth_name()
+        ))
+    })
+}
+
+/// Internal helper: require mutable f64 depth, return `&mut Matrix<f64>` or a JsError.
+fn require_f64_mut<'a>(mat: &'a mut Mat, op_name: &str) -> Result<&'a mut Matrix<f64>, JsError> {
+    let depth_name = mat.inner.depth_name().to_string();
+    mat.inner.as_matrix_f64_mut().ok_or_else(move || {
+        JsError::new(&format!(
+            "{op_name} requires f64 depth, but Mat has depth '{}'",
+            depth_name
+        ))
+    })
+}
+
+#[wasm_bindgen]
 impl Mat {
     // -- Constructors -------------------------------------------------------
 
@@ -571,7 +592,7 @@ pub struct Scalar {
     pub v3: f64,
 }
 
-#[wasm_bindgen(js_name = "Scalar")]
+#[wasm_bindgen]
 impl Scalar {
     /// Creates a Scalar from four channel values.
     #[wasm_bindgen(constructor)]
@@ -620,7 +641,7 @@ pub struct Vec2 {
     pub v1: f64,
 }
 
-#[wasm_bindgen(js_name = "Vec2")]
+#[wasm_bindgen]
 impl Vec2 {
     #[wasm_bindgen(constructor)]
     pub fn new(v0: f64, v1: f64) -> Vec2 {
@@ -635,7 +656,7 @@ pub struct Vec3 {
     pub v2: f64,
 }
 
-#[wasm_bindgen(js_name = "Vec3")]
+#[wasm_bindgen]
 impl Vec3 {
     #[wasm_bindgen(constructor)]
     pub fn new(v0: f64, v1: f64, v2: f64) -> Vec3 {
@@ -651,7 +672,7 @@ pub struct Vec4 {
     pub v3: f64,
 }
 
-#[wasm_bindgen(js_name = "Vec4")]
+#[wasm_bindgen]
 impl Vec4 {
     #[wasm_bindgen(constructor)]
     pub fn new(v0: f64, v1: f64, v2: f64, v3: f64) -> Vec4 {
@@ -881,7 +902,7 @@ fn color_code_from_i32(code: i32) -> Result<ColorConversionCode, JsError> {
 pub fn convert_color(src: &Mat, code: i32) -> Result<Mat, JsError> {
     let m = require_u8(src, "cvtColor")?;
     let cc = color_code_from_i32(code)?;
-    let result = cvt_color(m, cc).map_err(|e| JsError::new(e))?;
+    let result = cvt_color(m, cc).map_err(JsError::new)?;
     Ok(Mat {
         inner: DynamicMatrix {
             data: DynamicData::U8(result),
@@ -1681,6 +1702,7 @@ pub fn wasm_good_features_to_track(
 /// * `max_count`  – Maximum number of iterations.
 /// * `epsilon`    – Convergence threshold.
 #[wasm_bindgen(js_name = "cornerSubPix")]
+#[allow(clippy::too_many_arguments)]
 pub fn wasm_corner_sub_pix(
     src: &Mat,
     corners: &[f32],
@@ -1694,7 +1716,7 @@ pub fn wasm_corner_sub_pix(
     use purecv::core::types::{Point2f, Size2i, TermCriteria, TermType};
 
     let m = require_f32(src, "cornerSubPix")?;
-    if corners.len() % 2 != 0 {
+    if !corners.len().is_multiple_of(2) {
         return Err(JsError::new(
             "corners array must have even length (x, y pairs)",
         ));
@@ -1978,4 +2000,217 @@ pub fn optflow_use_initial_flow() -> i32 {
 #[wasm_bindgen(js_name = "OPTFLOW_LK_GET_MIN_EIGENVALS")]
 pub fn optflow_lk_get_min_eigenvals() -> i32 {
     optical_flow::OPTFLOW_LK_GET_MIN_EIGENVALS
+}
+
+// ---------------------------------------------------------------------------
+//  Calib3d (Pose Estimation & Homography)
+// ---------------------------------------------------------------------------
+
+use purecv::calib3d::geometry::rodrigues;
+use purecv::calib3d::homography::{find_homography, HomographyMethod};
+use purecv::calib3d::pose::{solve_pnp, solve_pnp_ransac, SolvePnPMethod};
+
+#[wasm_bindgen]
+pub struct Point2fVector {
+    pub(crate) inner: Vec<purecv::core::types::Point2f>,
+}
+
+#[wasm_bindgen]
+impl Point2fVector {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    pub fn push(&mut self, x: f32, y: f32) {
+        self.inner.push(purecv::core::types::Point2f::new(x, y));
+    }
+
+    pub fn size(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+impl Default for Point2fVector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+pub struct Point3fVector {
+    pub(crate) inner: Vec<purecv::core::types::Point3f>,
+}
+
+#[wasm_bindgen]
+impl Point3fVector {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    pub fn push(&mut self, x: f32, y: f32, z: f32) {
+        self.inner.push(purecv::core::types::Point3f::new(x, y, z));
+    }
+
+    pub fn size(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+impl Default for Point3fVector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn map_solve_pnp_method(val: i32) -> SolvePnPMethod {
+    match val {
+        1 => SolvePnPMethod::EPnP,
+        2 => SolvePnPMethod::P3P,
+        5 => SolvePnPMethod::AP3P,
+        6 => SolvePnPMethod::SqPnP,
+        _ => SolvePnPMethod::Iterative,
+    }
+}
+
+fn map_homography_method(val: i32) -> HomographyMethod {
+    match val {
+        4 => HomographyMethod::LMedS,
+        8 => HomographyMethod::Ransac,
+        16 => HomographyMethod::Rho,
+        _ => HomographyMethod::None,
+    }
+}
+
+#[wasm_bindgen(js_name = "solvePnP")]
+#[allow(clippy::too_many_arguments)]
+pub fn solve_pnp_wasm(
+    object_points: &Point3fVector,
+    image_points: &Point2fVector,
+    camera_matrix: &Mat,
+    dist_coeffs: Option<Vec<f64>>,
+    rvec: &mut Mat,
+    tvec: &mut Mat,
+    use_extrinsic_guess: bool,
+    flags: i32,
+) -> Result<bool, JsError> {
+    let cam_mat = require_f64(camera_matrix, "solvePnP")?;
+    let r_mat = require_f64_mut(rvec, "solvePnP (rvec)")?;
+    let t_mat = require_f64_mut(tvec, "solvePnP (tvec)")?;
+
+    let dist_ref = dist_coeffs.as_deref();
+
+    solve_pnp(
+        &object_points.inner,
+        &image_points.inner,
+        cam_mat,
+        dist_ref,
+        r_mat,
+        t_mat,
+        use_extrinsic_guess,
+        map_solve_pnp_method(flags),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))
+}
+
+#[wasm_bindgen(js_name = "solvePnPRansac")]
+#[allow(clippy::too_many_arguments)]
+pub fn solve_pnp_ransac_wasm(
+    object_points: &Point3fVector,
+    image_points: &Point2fVector,
+    camera_matrix: &Mat,
+    dist_coeffs: Option<Vec<f64>>,
+    rvec: &mut Mat,
+    tvec: &mut Mat,
+    use_extrinsic_guess: bool,
+    iterations_count: i32,
+    reproj_threshold: f32,
+    confidence: f64,
+    flags: i32,
+) -> Result<JsValue, JsError> {
+    let cam_mat = require_f64(camera_matrix, "solvePnPRansac")?;
+    let r_mat = require_f64_mut(rvec, "solvePnPRansac (rvec)")?;
+    let t_mat = require_f64_mut(tvec, "solvePnPRansac (tvec)")?;
+
+    let dist_ref = dist_coeffs.as_deref();
+    let mut inliers_vec = Vec::new();
+
+    let success = solve_pnp_ransac(
+        &object_points.inner,
+        &image_points.inner,
+        cam_mat,
+        dist_ref,
+        r_mat,
+        t_mat,
+        use_extrinsic_guess,
+        iterations_count,
+        reproj_threshold,
+        confidence,
+        Some(&mut inliers_vec),
+        map_solve_pnp_method(flags),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("success"),
+        &JsValue::from_bool(success),
+    )
+    .map_err(|_| JsError::new("Failed to set success"))?;
+
+    let js_inliers = js_sys::Int32Array::from(inliers_vec.as_slice());
+    js_sys::Reflect::set(&obj, &JsValue::from_str("inliers"), &js_inliers)
+        .map_err(|_| JsError::new("Failed to set inliers"))?;
+
+    Ok(obj.into())
+}
+
+#[wasm_bindgen(js_name = "findHomography")]
+pub fn find_homography_wasm(
+    src_points: &Point2fVector,
+    dst_points: &Point2fVector,
+    method: i32,
+    ransac_reproj_threshold: f64,
+) -> Result<JsValue, JsError> {
+    let mut mask_vec = Vec::new();
+    let h_mat = find_homography(
+        &src_points.inner,
+        &dst_points.inner,
+        map_homography_method(method),
+        ransac_reproj_threshold,
+        Some(&mut mask_vec),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    let obj = js_sys::Object::new();
+    let js_h = Mat {
+        inner: purecv::core::dynamic::DynamicMatrix {
+            data: purecv::core::dynamic::DynamicData::F64(h_mat),
+        },
+    };
+    js_sys::Reflect::set(&obj, &JsValue::from_str("homography"), &JsValue::from(js_h))
+        .map_err(|_| JsError::new("Failed to set homography"))?;
+
+    let js_mask = js_sys::Uint8Array::from(mask_vec.as_slice());
+    js_sys::Reflect::set(&obj, &JsValue::from_str("mask"), &js_mask)
+        .map_err(|_| JsError::new("Failed to set mask"))?;
+
+    Ok(obj.into())
+}
+
+#[wasm_bindgen(js_name = "rodrigues")]
+pub fn rodrigues_wasm(src: &Mat, dst: &mut Mat) -> Result<(), JsError> {
+    let src_mat = require_f64(src, "rodrigues (src)")?;
+    let dst_mat = require_f64_mut(dst, "rodrigues (dst)")?;
+    rodrigues(src_mat, dst_mat).map_err(|e| JsError::new(&format!("{e}")))
 }
