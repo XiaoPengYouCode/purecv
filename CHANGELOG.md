@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-05-09
+
+### ⚙️ Miscellaneous Tasks
+
+- *(core)* Add calib3d module scaffold
+- *(core)* Structure calib3d module with tests and simd stubs
+
+### 🐛 Bug Fixes
+
+- *(calib3d)* Address code review: improve error messages and doc comments
+- *(calib3d)* Address PR review comments for pose and homography
+
+### 📚 Documentation
+
+- Add calib3d features and pose estimation example to README (#52)
+- Update examples section to list all available examples
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(wasm)* Finalize calib3d bindings and tests (closes #53)
+- *(wasm)* Add interactive pose estimation demo and update documentation (#53)
+
+### 🚀 Features
+
+- *(calib3d)* Implement find_homography, rodrigues, solve_pnp, solve_pnp_ransac
+- *(calib3d)* Add pose estimation example using solve_pnp and rodrigues (#51)
+
 ## [0.3.1] - 2026-05-02
 
 ### ⚙️ Miscellaneous Tasks

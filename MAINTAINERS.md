@@ -35,3 +35,4 @@ We use `git-cliff` to parse the conventional commits and update the historical c
 
 ```bash
 npx git-cliff -u --prepend CHANGELOG.md
+```
