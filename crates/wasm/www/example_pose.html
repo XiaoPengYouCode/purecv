@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<!--
+ *  example_pose.html
+ *  purecv
+ *
+ *  This file is part of purecv - WebARKit.
+ *
+ *  purecv is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  purecv is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public License
+ *  along with purecv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  As a special exception, the copyright holders of this library give you
+ *  permission to link this library with independent modules to produce an
+ *  executable, regardless of the license terms of these independent modules, and to
+ *  copy and distribute the resulting executable under terms of your choice,
+ *  provided that you also meet, for each linked independent module, the terms and
+ *  conditions of the license of that module. An independent module is a module
+ *  which is neither derived from nor based on this library. If you modify this
+ *  library, you may extend this exception to your version of the library, but you
+ *  are not obligated to do so. If you do not wish to do so, delete this exception
+ *  statement from your version.
+ *
+ *  Copyright 2026 WebARKit.
+ *
+ *  Author(s): Walter Perdan @kalwalt https://github.com/kalwalt
+ *
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PureCV - Pose Estimation</title>
+    <style>
+        :root {
+            --primary: #00f2fe;
+            --secondary: #4facfe;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+            --accent-green: #22c55e;
+            --accent-orange: #f59e0b;
+            --accent-red: #ef4444;
+        }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1100px;
+            width: 90%;
+            margin: 2rem 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        .header p {
+            color: #94a3b8;
+            font-size: 1rem;
+        }
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 768px) {
+            .layout { grid-template-columns: 1fr; }
+        }
+        .card {
+            background: var(--card);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            margin: 0 0 1rem 0;
+            font-size: 1.25rem;
+            color: var(--secondary);
+        }
+        .canvas-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            background: #000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            cursor: grab;
+        }
+        canvas:active { cursor: grabbing; }
+        .results {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .result-group {
+            background: rgba(0,0,0,0.2);
+            border-radius: 0.75rem;
+            padding: 1rem;
+        }
+        .result-group h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .result-group h3.rvec-label { color: var(--accent-green); }
+        .result-group h3.tvec-label { color: var(--accent-orange); }
+        .result-group h3.rmat-label { color: var(--primary); }
+        .result-group h3.homo-label { color: var(--accent-red); }
+        .matrix-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.25rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.8rem;
+        }
+        .matrix-cell {
+            background: rgba(255,255,255,0.05);
+            padding: 0.35rem 0.5rem;
+            border-radius: 0.25rem;
+            text-align: right;
+        }
+        .vector-row {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9rem;
+            padding: 0.35rem 0;
+        }
+        .instructions {
+            color: #64748b;
+            font-size: 0.85rem;
+            text-align: center;
+            margin-top: 0.75rem;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 0.5rem;
+        }
+        .badge-ok { background: rgba(34,197,94,0.15); color: var(--accent-green); }
+        .badge-fail { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 23, 42, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        .hidden { display: none; }
+        #reset-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            color: var(--bg);
+            padding: 0.5rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: opacity 0.2s;
+        }
+        #reset-btn:hover { opacity: 0.85; }
+    </style>
+</head>
+<body>
+    <div id="loader" class="loading">
+        <p>Initializing WASM...</p>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>Pose Estimation</h1>
+            <p>Drag the four marker corners to simulate a perspective view. PureCV computes the 3D camera pose in real-time.</p>
+        </div>
+
+        <div class="layout">
+            <!-- Left: interactive canvas -->
+            <div class="card">
+                <h2>Interactive Marker</h2>
+                <div class="canvas-container">
+                    <canvas id="canvas" width="500" height="500"></canvas>
+                </div>
+                <div class="instructions">
+                    <button id="reset-btn">Reset Corners</button>
+                </div>
+            </div>
+
+            <!-- Right: results -->
+            <div class="card results" id="results-panel">
+                <h2>Computed Pose <span id="status-badge" class="badge badge-ok">OK</span></h2>
+
+                <div class="result-group">
+                    <h3 class="rvec-label">Rotation Vector (rvec)</h3>
+                    <div class="vector-row" id="rvec-display">—</div>
+                </div>
+
+                <div class="result-group">
+                    <h3 class="tvec-label">Translation Vector (tvec)</h3>
+                    <div class="vector-row" id="tvec-display">—</div>
+                </div>
+
+                <div class="result-group">
+                    <h3 class="rmat-label">Rotation Matrix (rodrigues)</h3>
+                    <div class="matrix-grid" id="rmat-display">
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                    </div>
+                </div>
+
+                <div class="result-group">
+                    <h3 class="homo-label">Homography (3×3)</h3>
+                    <div class="matrix-grid" id="homo-display">
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                        <span class="matrix-cell">—</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="example_pose.js"></script>
+</body>
+</html>

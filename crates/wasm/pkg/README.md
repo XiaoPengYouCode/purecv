@@ -53,9 +53,11 @@ Because WebAssembly runs linearly in memory and holds pointers to Rust `Vec` obj
 
 ## API coverage
 
-Right now we have covered a large majority of operations for `core` and `imgproc`:
+Right now we have covered a large majority of operations for `core` and `imgproc`, and have started on `calib3d` and `video`:
 
 - **Core**: Arithmetic (`add`, `subtract`, `multiply`, `absdiff` etc.), Structural (`hconcat`, `vconcat`, `flip`), Geometry, constants etc.
-- **ImgProc**: Filters (`blur`, `gaussian_blur`, `bilateral_filter`), Thresholding (`threshold`), Coloring (`cvt_color`), Edge Derivatives (`canny`, `sobel`, `laplacian`), Morphology (`erode`, `dilate`, `morphology_ex`, `get_structuring_element`), Pyramids (`pyr_down`, `pyr_up`, `build_pyramid`).
+- **ImgProc**: Filters (`blur`, `gaussian_blur`, `bilateral_filter`), Thresholding (`threshold`), Coloring (`cvt_color`), Edge Derivatives (`canny`, `sobel`, `laplacian`), Morphology (`erode`, `dilate`, `morphology_ex`, `get_structuring_element`), Pyramids (`pyr_down`, `pyr_up`, `build_pyramid`), Feature Detection (`good_features_to_track`, `corner_sub_pix`).
+- **Video**: Optical Flow (`calc_optical_flow_pyr_lk`).
+- **Calib3d**: Pose Estimation (`solve_pnp`, `solve_pnp_ransac`), Homography (`find_homography`), and geometry (`rodrigues`).
 
 Note: To interface between JavaScript Typed Arrays and `purecv-wasm`, please use the available getter functions (`.data()`) which directly retrieve a Float32Array or Uint8Array view into WASM memory.
