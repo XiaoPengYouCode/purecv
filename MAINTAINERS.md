@@ -28,7 +28,7 @@ Publishing a new version requires a mix of manual changelog curation and automat
 2. Verify that all CI checks (Formatting, Clippy, Tests for `parallel` and `simd`) are passing on the latest commit.
 
 ### Step 2: Bump the Version
-Update the version number in the `Cargo.toml` file of the workspace.
+Update the version number in the `Cargo.toml` file of the workspace in [package] and [workspace.package] sections. 
 
 ### Step 3: Generate the Local Changelog
 We use `git-cliff` to parse the conventional commits and update the historical changelog. Run the following command in the root directory:
