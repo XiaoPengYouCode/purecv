@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-05-28
+
+### 📚 Documentation
+
+- *(bench)* Document FAST and ORB parallel vs sequential benchmark results (#63)
+- *(features2d)* Add fast and orb examples and improve module/global documentation (#64)
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(wasm)* Add features2d exports and SIMD acceleration for ORB and FAST (#71)
+
+### 🚀 Features
+
+- *(features2d)* Add module skeleton and public API (#56)
+- *(features2d)* Implement keypoint types and shared utilities
+- *(features2d)* Add FAST keypoint detection algorithm
+- *(features2d)* Implement complete ORB keypoint and steered BRIEF descriptor pipeline
+
+### 🧪 Testing
+
+- *(imgproc)* Add robust unit tests for generic bilinear resize (#60)
+
 ## [0.4.0] - 2026-05-09
 
 ### ⚙️ Miscellaneous Tasks

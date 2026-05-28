@@ -78,7 +78,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-purecv = "0.2"
+purecv = "0.5"
 ```
 
 ### Feature Flags
@@ -95,14 +95,14 @@ To enable the `ndarray` feature:
 
 ```toml
 [dependencies]
-purecv = { version = "0.2", features = ["ndarray"] }
+purecv = { version = "0.5", features = ["ndarray"] }
 ```
 
 To enable SIMD + Parallel for maximum performance:
 
 ```toml
 [dependencies]
-purecv = { version = "0.2", features = ["parallel", "simd"] }
+purecv = { version = "0.5", features = ["parallel", "simd"] }
 ```
 
 ### Usage Example
