@@ -46,7 +46,8 @@ pub mod video;
 /// Prelude to easily import common structures
 pub mod prelude {
     pub use crate::calib3d::{
-        find_homography, rodrigues, solve_pnp, solve_pnp_ransac, HomographyMethod, SolvePnPMethod,
+        find_fundamental_mat, find_homography, init_undistort_rectify_map, rodrigues, solve_pnp,
+        solve_pnp_ransac, FundamentalMatMethod, HomographyMethod, SolvePnPMethod,
     };
     pub use crate::core::types::{
         BorderTypes, Point2f, Point2i, Point3f, Rect2f, Rect2i, Scalar, Size2f, Size2i,
@@ -62,7 +63,9 @@ pub mod prelude {
     };
     pub use crate::imgproc::filter::{bilateral_filter, box_filter, gaussian_blur};
     pub use crate::imgproc::threshold::{threshold, ThresholdTypes};
-    pub use crate::imgproc::{cvt_color, ColorConversionCode};
+    pub use crate::imgproc::{
+        cvt_color, remap, warp_perspective, ColorConversionCode, InterpolationFlags,
+    };
     pub use crate::video::optical_flow::{
         build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, OpticalFlowPyramid,
         OPTFLOW_LK_GET_MIN_EIGENVALS, OPTFLOW_USE_INITIAL_FLOW,

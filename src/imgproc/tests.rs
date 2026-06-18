@@ -1229,4 +1229,91 @@ mod imgproc_tests {
         assert!(resize(&src, Size::new(0, 4)).is_err());
         assert!(resize(&src, Size::new(4, 0)).is_err());
     }
+
+    #[test]
+    fn test_remap_nearest() {
+        let src = Matrix::from_vec(3, 3, 1, vec![10u8, 20, 30, 40, 50, 60, 70, 80, 90]);
+        let mut map1 = Matrix::<f32>::new(3, 3, 1);
+        let mut map2 = Matrix::<f32>::new(3, 3, 1);
+        for y in 0..3 {
+            for x in 0..3 {
+                *map1.at_mut(y, x, 0).unwrap() = (x as f32) + 1.0;
+                *map2.at_mut(y, x, 0).unwrap() = y as f32;
+            }
+        }
+
+        let res = remap(
+            &src,
+            &map1,
+            &map2,
+            InterpolationFlags::Nearest,
+            BorderTypes::Constant,
+            Scalar::all(0u8),
+        )
+        .unwrap();
+
+        assert_eq!(res.data, vec![20, 30, 0, 50, 60, 0, 80, 90, 0,]);
+    }
+
+    #[test]
+    fn test_remap_bilinear() {
+        let src = Matrix::from_vec(2, 2, 1, vec![10.0f32, 20.0, 30.0, 40.0]);
+        let mut map1 = Matrix::<f32>::new(2, 2, 1);
+        let mut map2 = Matrix::<f32>::new(2, 2, 1);
+        for y in 0..2 {
+            for x in 0..2 {
+                *map1.at_mut(y, x, 0).unwrap() = 0.5;
+                *map2.at_mut(y, x, 0).unwrap() = 0.5;
+            }
+        }
+
+        let res = remap(
+            &src,
+            &map1,
+            &map2,
+            InterpolationFlags::Linear,
+            BorderTypes::Constant,
+            Scalar::all(0.0f32),
+        )
+        .unwrap();
+
+        for val in res.data {
+            assert!((val - 25.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn test_warp_perspective_identity() {
+        let src = Matrix::from_vec(2, 2, 1, vec![10u8, 20, 30, 40]);
+        let m = Matrix::from_vec(3, 3, 1, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        let res = warp_perspective(
+            &src,
+            &m,
+            Size2i::new(2, 2),
+            InterpolationFlags::Nearest,
+            BorderTypes::Constant,
+            Scalar::all(0u8),
+        )
+        .unwrap();
+
+        assert_eq!(res.data, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn test_warp_perspective_translation() {
+        let src = Matrix::from_vec(2, 2, 1, vec![10f32, 20.0, 30.0, 40.0]);
+        // Translate by dx=1.0, dy=0.0
+        let m = Matrix::from_vec(3, 3, 1, vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        let res = warp_perspective(
+            &src,
+            &m,
+            Size2i::new(2, 2),
+            InterpolationFlags::Nearest,
+            BorderTypes::Constant,
+            Scalar::all(0.0f32),
+        )
+        .unwrap();
+
+        assert_eq!(res.data, vec![0.0, 10.0, 0.0, 30.0]);
+    }
 }
