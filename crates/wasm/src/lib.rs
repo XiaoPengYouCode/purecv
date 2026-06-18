@@ -1086,6 +1086,136 @@ pub fn laplacian(
     })
 }
 
+/// Helper to convert a JS integer into an `InterpolationFlags`.
+fn interpolation_flags_from_i32(val: i32) -> Result<purecv::imgproc::InterpolationFlags, JsError> {
+    match val {
+        0 => Ok(purecv::imgproc::InterpolationFlags::Nearest),
+        1 => Ok(purecv::imgproc::InterpolationFlags::Linear),
+        _ => Err(JsError::new(&format!("Unknown interpolation type: {val}"))),
+    }
+}
+
+/// Applies a generic geometrical transformation to an image.
+#[wasm_bindgen(js_name = "remap")]
+pub fn remap_wasm(
+    src: &Mat,
+    map1: &Mat,
+    map2: &Mat,
+    interpolation: i32,
+    border_mode: i32,
+    border_value: &Scalar,
+) -> Result<Mat, JsError> {
+    use purecv::core::types::Scalar as CoreScalar;
+    use purecv::imgproc::remap;
+
+    let m1 = require_f32(map1, "remap (map1)")?;
+    let m2 = require_f32(map2, "remap (map2)")?;
+    let interp = interpolation_flags_from_i32(interpolation)?;
+    let border = border_type_from_i32(border_mode)?;
+
+    let data = match &src.inner.data {
+        DynamicData::U8(m) => {
+            let bv = CoreScalar::new(
+                num_traits::FromPrimitive::from_f64(border_value.v0).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v1).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v2).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v3).unwrap_or(0),
+            );
+            let result =
+                remap(m, m1, m2, interp, border, bv).map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::U8(result)
+        }
+        DynamicData::F32(m) => {
+            let bv = CoreScalar::new(
+                num_traits::FromPrimitive::from_f64(border_value.v0).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v1).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v2).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v3).unwrap_or(0.0),
+            );
+            let result =
+                remap(m, m1, m2, interp, border, bv).map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::F32(result)
+        }
+        DynamicData::F64(m) => {
+            let bv = CoreScalar::new(
+                border_value.v0,
+                border_value.v1,
+                border_value.v2,
+                border_value.v3,
+            );
+            let result =
+                remap(m, m1, m2, interp, border, bv).map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::F64(result)
+        }
+        _ => return Err(JsError::new("remap: unsupported depth type")),
+    };
+
+    Ok(Mat {
+        inner: DynamicMatrix { data },
+    })
+}
+
+/// Applies a perspective transformation to an image.
+#[wasm_bindgen(js_name = "warpPerspective")]
+pub fn warp_perspective_wasm(
+    src: &Mat,
+    m: &Mat,
+    dsize_width: i32,
+    dsize_height: i32,
+    flags: i32,
+    border_mode: i32,
+    border_value: &Scalar,
+) -> Result<Mat, JsError> {
+    use purecv::core::types::{Scalar as CoreScalar, Size2i};
+    use purecv::imgproc::warp_perspective;
+
+    let m_mat = require_f64(m, "warpPerspective (M)")?;
+    let interp = interpolation_flags_from_i32(flags)?;
+    let border = border_type_from_i32(border_mode)?;
+    let dsize = Size2i::new(dsize_width, dsize_height);
+
+    let data = match &src.inner.data {
+        DynamicData::U8(m) => {
+            let bv = CoreScalar::new(
+                num_traits::FromPrimitive::from_f64(border_value.v0).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v1).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v2).unwrap_or(0),
+                num_traits::FromPrimitive::from_f64(border_value.v3).unwrap_or(0),
+            );
+            let result = warp_perspective(m, m_mat, dsize, interp, border, bv)
+                .map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::U8(result)
+        }
+        DynamicData::F32(m) => {
+            let bv = CoreScalar::new(
+                num_traits::FromPrimitive::from_f64(border_value.v0).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v1).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v2).unwrap_or(0.0),
+                num_traits::FromPrimitive::from_f64(border_value.v3).unwrap_or(0.0),
+            );
+            let result = warp_perspective(m, m_mat, dsize, interp, border, bv)
+                .map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::F32(result)
+        }
+        DynamicData::F64(m) => {
+            let bv = CoreScalar::new(
+                border_value.v0,
+                border_value.v1,
+                border_value.v2,
+                border_value.v3,
+            );
+            let result = warp_perspective(m, m_mat, dsize, interp, border, bv)
+                .map_err(|e| JsError::new(&format!("{e}")))?;
+            DynamicData::F64(result)
+        }
+        _ => return Err(JsError::new("warpPerspective: unsupported depth type")),
+    };
+
+    Ok(Mat {
+        inner: DynamicMatrix { data },
+    })
+}
+
 // ---------------------------------------------------------------------------
 //  Blur / filter operations (require f32 depth)
 // ---------------------------------------------------------------------------
@@ -2218,6 +2348,113 @@ pub fn rodrigues_wasm(src: &Mat, dst: &mut Mat) -> Result<(), JsError> {
     let src_mat = require_f64(src, "rodrigues (src)")?;
     let dst_mat = require_f64_mut(dst, "rodrigues (dst)")?;
     rodrigues(src_mat, dst_mat).map_err(|e| JsError::new(&format!("{e}")))
+}
+
+#[wasm_bindgen(js_name = "initUndistortRectifyMap")]
+pub fn init_undistort_rectify_map_wasm(
+    camera_matrix: &Mat,
+    dist_coeffs: &Mat,
+    r: Option<Mat>,
+    new_camera_matrix: &Mat,
+    size_width: i32,
+    size_height: i32,
+) -> Result<JsValue, JsError> {
+    use purecv::calib3d::undistort::init_undistort_rectify_map;
+    use purecv::core::types::Size2i;
+
+    let cam_mat = require_f64(camera_matrix, "initUndistortRectifyMap (camera_matrix)")?;
+    let dist = require_f64(dist_coeffs, "initUndistortRectifyMap (dist_coeffs)")?;
+
+    let r_mat = match &r {
+        Some(mat) => Some(require_f64(mat, "initUndistortRectifyMap (R)")?),
+        None => None,
+    };
+
+    let new_cam_mat = require_f64(
+        new_camera_matrix,
+        "initUndistortRectifyMap (new_camera_matrix)",
+    )?;
+
+    let (map1, map2) = init_undistort_rectify_map(
+        cam_mat,
+        dist,
+        r_mat,
+        new_cam_mat,
+        Size2i::new(size_width, size_height),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    let obj = js_sys::Object::new();
+    let js_map1 = Mat {
+        inner: purecv::core::dynamic::DynamicMatrix {
+            data: purecv::core::dynamic::DynamicData::F32(map1),
+        },
+    };
+    let js_map2 = Mat {
+        inner: purecv::core::dynamic::DynamicMatrix {
+            data: purecv::core::dynamic::DynamicData::F32(map2),
+        },
+    };
+
+    js_sys::Reflect::set(&obj, &JsValue::from_str("map1"), &JsValue::from(js_map1))
+        .map_err(|_| JsError::new("Failed to set map1"))?;
+    js_sys::Reflect::set(&obj, &JsValue::from_str("map2"), &JsValue::from(js_map2))
+        .map_err(|_| JsError::new("Failed to set map2"))?;
+
+    Ok(obj.into())
+}
+
+#[wasm_bindgen(js_name = "findFundamentalMat")]
+pub fn find_fundamental_mat_wasm(
+    points1: &Point2fVector,
+    points2: &Point2fVector,
+    method: i32,
+    ransac_reproj_threshold: f64,
+    confidence: f64,
+    max_iters: usize,
+) -> Result<JsValue, JsError> {
+    use purecv::calib3d::fundamental::{find_fundamental_mat, FundamentalMatMethod};
+
+    let method_enum = match method {
+        2 => FundamentalMatMethod::FM_8POINT,
+        8 => FundamentalMatMethod::FM_RANSAC,
+        _ => {
+            return Err(JsError::new(&format!(
+                "Unknown fundamental matrix method: {method}"
+            )))
+        }
+    };
+
+    let mut mask_vec = Vec::new();
+    let f_mat = find_fundamental_mat(
+        &points1.inner,
+        &points2.inner,
+        method_enum,
+        ransac_reproj_threshold,
+        confidence,
+        max_iters,
+        Some(&mut mask_vec),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    let obj = js_sys::Object::new();
+    let js_f = Mat {
+        inner: purecv::core::dynamic::DynamicMatrix {
+            data: purecv::core::dynamic::DynamicData::F64(f_mat),
+        },
+    };
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("fundamental"),
+        &JsValue::from(js_f),
+    )
+    .map_err(|_| JsError::new("Failed to set fundamental"))?;
+
+    let js_mask = js_sys::Uint8Array::from(mask_vec.as_slice());
+    js_sys::Reflect::set(&obj, &JsValue::from_str("mask"), &js_mask)
+        .map_err(|_| JsError::new("Failed to set mask"))?;
+
+    Ok(obj.into())
 }
 
 // ---------------------------------------------------------------------------

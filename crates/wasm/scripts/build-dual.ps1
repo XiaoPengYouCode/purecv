@@ -3,6 +3,8 @@
 
 $ErrorActionPreference = "Stop"
 
+$env:CARGO_HTTP_CHECK_REVOKE = "false"
+
 # Get the directory where the script is located
 $scriptDir = $PSScriptRoot
 $wasmDir = Join-Path $scriptDir ".." | Resolve-Path

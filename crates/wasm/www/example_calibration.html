@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<!--
+ *  example_calibration.html
+ *  purecv
+ *
+ *  This file is part of purecv - WebARKit.
+ *
+ *  purecv is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  purecv is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public License
+ *  along with purecv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  As a special exception, the copyright holders of this library give you
+ *  permission to link this library with independent modules to produce an
+ *  executable, regardless of the license terms of these independent modules, and to
+ *  copy and distribute the resulting executable under terms of your choice,
+ *  provided that you also meet, for each linked independent module, the terms and
+ *  conditions of the license of that module. An independent module is a module
+ *  which is neither derived from nor based on this library. If you modify this
+ *  library, you may extend this exception to your version of the library, but you
+ *  are not obligated to do so. If you do not wish to do so, delete this exception
+ *  statement from your version.
+ *
+ *  Copyright 2026 WebARKit.
+ *
+ *  Author(s): Walter Perdan @kalwalt https://github.com/kalwalt
+ *
+ -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PureCV - Calibration & Warping</title>
+    <style>
+        :root {
+            --primary: #38bdf8;
+            --secondary: #0ea5e9;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+            --accent-green: #10b981;
+            --accent-purple: #8b5cf6;
+            --accent-amber: #f59e0b;
+        }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            width: 90%;
+            margin: 2rem 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+            margin-top: 0;
+        }
+        .header p {
+            color: #94a3b8;
+            font-size: 1rem;
+            margin: 0;
+        }
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .tab-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #334155;
+            color: #94a3b8;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover {
+            color: var(--text);
+            border-color: var(--primary);
+            background: rgba(56, 189, 248, 0.05);
+        }
+        .tab-btn.active {
+            color: var(--bg);
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+        .layout {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 900px) {
+            .layout { grid-template-columns: 1fr; }
+        }
+        .card {
+            background: var(--card);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+        .card h2 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.25rem;
+            color: var(--primary);
+        }
+        .uploader {
+            border: 2px dashed #334155;
+            padding: 1rem;
+            text-align: center;
+            border-radius: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .uploader:hover {
+            border-color: var(--primary);
+            background: rgba(56, 189, 248, 0.05);
+        }
+        .uploader p {
+            margin: 0;
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+        .controls-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .control-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .control-item label {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
+        }
+        .control-item label span {
+            font-family: monospace;
+            color: var(--primary);
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+        .display-area {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 600px) {
+            .display-area { grid-template-columns: 1fr; }
+        }
+        .canvas-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 1rem;
+            border-radius: 0.75rem;
+            border: 1px solid #1e293b;
+        }
+        .canvas-box h3 {
+            margin: 0;
+            font-size: 1rem;
+            color: #e2e8f0;
+        }
+        .canvas-wrapper {
+            position: relative;
+            background: #000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            border: 1px solid #334155;
+            max-width: 100%;
+        }
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        .canvas-interactive {
+            cursor: crosshair;
+        }
+        .btn {
+            background: var(--secondary);
+            border: none;
+            color: #fff;
+            padding: 0.6rem 1.2rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-align: center;
+        }
+        .btn:hover {
+            background: #0284c7;
+        }
+        .loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 23, 42, 0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            gap: 1rem;
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #1e293b;
+            border-top: 5px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader" class="loading">
+        <div class="spinner"></div>
+        <p>Initializing PureCV WASM...</p>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>Calibration & Warping</h1>
+            <p>Interactive Camera Lens Undistortion and Geometric Perspective Warp</p>
+        </div>
+
+        <div class="tabs">
+            <button id="tab-undistort" class="tab-btn active">Lens Undistortion</button>
+            <button id="tab-warp" class="tab-btn">Perspective Warp</button>
+        </div>
+
+        <div class="layout">
+            <!-- Left panel: controls -->
+            <div class="card">
+                <h2>Controls</h2>
+                
+                <div id="drop-zone" class="uploader">
+                    <p>Click or drag custom image</p>
+                    <input type="file" id="file-input" accept="image/*" class="hidden">
+                </div>
+
+                <!-- Controls for Undistortion -->
+                <div id="panel-undistort" class="controls-group">
+                    <div class="control-item">
+                        <label>Radial Dist. (k1): <span id="val-k1">0.00</span></label>
+                        <input type="range" id="param-k1" min="-1.5" max="1.5" step="0.05" value="-0.40">
+                    </div>
+                    <div class="control-item">
+                        <label>Radial Dist. (k2): <span id="val-k2">0.00</span></label>
+                        <input type="range" id="param-k2" min="-1.5" max="1.5" step="0.05" value="0.10">
+                    </div>
+                    <div class="control-item">
+                        <label>Tangential Dist. (p1): <span id="val-p1">0.00</span></label>
+                        <input type="range" id="param-p1" min="-0.2" max="0.2" step="0.01" value="0.00">
+                    </div>
+                    <div class="control-item">
+                        <label>Tangential Dist. (p2): <span id="val-p2">0.00</span></label>
+                        <input type="range" id="param-p2" min="-0.2" max="0.2" step="0.01" value="0.00">
+                    </div>
+                    <div class="control-item">
+                        <label>Focal Length (f): <span id="val-f">1.00</span></label>
+                        <input type="range" id="param-f" min="0.4" max="2.0" step="0.05" value="0.95">
+                    </div>
+                    <button id="reset-undistort" class="btn">Reset Distortion</button>
+                </div>
+
+                <!-- Controls for Warp -->
+                <div id="panel-warp" class="controls-group hidden">
+                    <p style="font-size: 0.875rem; color: #94a3b8; margin: 0; line-height: 1.4;">
+                        Drag the green corners in the source image (Left) to specify the source region. It will be warped into a frontal rectangular view in the output (Right).
+                    </p>
+                    <button id="reset-warp" class="btn">Reset Corners</button>
+                </div>
+            </div>
+
+            <!-- Right panel: canvases -->
+            <div class="card">
+                <div class="display-area">
+                    <div class="canvas-box">
+                        <h3 id="label-canvas-src">Source Image</h3>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-src" width="400" height="400" class="canvas-interactive"></canvas>
+                        </div>
+                    </div>
+                    <div class="canvas-box">
+                        <h3>Processed Result</h3>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-dst" width="400" height="400"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="example_calibration.js"></script>
+</body>
+</html>
