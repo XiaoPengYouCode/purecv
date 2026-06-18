@@ -35,8 +35,8 @@
  */
 
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
-use purecv::prelude::*;
 use purecv::core::Matrix;
+use purecv::prelude::*;
 use purecv::version;
 use std::path::Path;
 use std::time::Instant;
@@ -63,11 +63,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Camera Undistortion
     println!("Computing camera undistortion map...");
-    let camera_matrix = Matrix::from_vec(3, 3, 1, vec![
-        width as f64 * 0.8, 0.0, width as f64 * 0.5,
-        0.0, height as f64 * 0.8, height as f64 * 0.5,
-        0.0, 0.0, 1.0,
-    ]);
+    let camera_matrix = Matrix::from_vec(
+        3,
+        3,
+        1,
+        vec![
+            width as f64 * 0.8,
+            0.0,
+            width as f64 * 0.5,
+            0.0,
+            height as f64 * 0.8,
+            height as f64 * 0.5,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    );
     // Strong barrel distortion (k1 = -0.5, k2 = 0.1)
     let dist_coeffs = Matrix::from_vec(1, 4, 1, vec![-0.5, 0.1, 0.0, 0.0]);
     let new_camera_matrix = camera_matrix.clone();
@@ -99,11 +110,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Perspective Warp
     println!("Applying perspective warp...");
     // Dynamic perspective homography matrix (slight rotation, skew, and zoom)
-    let m = Matrix::from_vec(3, 3, 1, vec![
-        0.8, 0.1, width as f64 * 0.1,
-        -0.1, 0.8, height as f64 * 0.1,
-        0.0005, 0.0005, 1.0,
-    ]);
+    let m = Matrix::from_vec(
+        3,
+        3,
+        1,
+        vec![
+            0.8,
+            0.1,
+            width as f64 * 0.1,
+            -0.1,
+            0.8,
+            height as f64 * 0.1,
+            0.0005,
+            0.0005,
+            1.0,
+        ],
+    );
 
     let t_warp = Instant::now();
     let warped = warp_perspective(
