@@ -54,10 +54,12 @@
 //!
 //! [ocv]: https://docs.opencv.org/4.10.0/d9/d0c/group__calib3d.html
 
+pub mod fundamental;
 pub mod geometry;
 pub mod homography;
 pub(crate) mod linalg;
 pub mod pose;
+pub mod undistort;
 
 #[cfg(feature = "simd")]
 pub(crate) mod simd;
@@ -69,6 +71,8 @@ mod tests;
 // Re-exports
 // ---------------------------------------------------------------------------
 
+pub use fundamental::{find_fundamental_mat, FundamentalMatMethod};
 pub use geometry::rodrigues;
 pub use homography::{find_homography, HomographyMethod};
 pub use pose::{solve_pnp, solve_pnp_ransac, SolvePnPMethod};
+pub use undistort::init_undistort_rectify_map;

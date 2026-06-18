@@ -52,6 +52,8 @@
 //! WASM `simd128`). No target-specific `#[cfg(target_arch)]` is needed —
 //! the same source compiles for native and `wasm32` targets.
 
+use crate::core::types::{BorderTypes, Scalar};
+
 // ---------------------------------------------------------------------------
 //  SimdElement trait — compile-time type routing (always available)
 // ---------------------------------------------------------------------------
@@ -209,6 +211,38 @@ pub trait SimdElement: Copy + Send + Sync + 'static {
 
     /// Vertical pass: dst[i] = min/max of rows[0..ksize][i]
     fn simd_min_max_col(_dst: &mut [Self], _rows: &[&[Self]], _is_erode: bool) -> bool {
+        false
+    }
+
+    /// Remap a row with bilinear interpolation.
+    #[allow(clippy::too_many_arguments)]
+    fn simd_remap_bilinear_row(
+        _dst_row: &mut [Self],
+        _src: &[Self],
+        _src_cols: usize,
+        _src_rows: usize,
+        _channels: usize,
+        _map1_row: &[f32],
+        _map2_row: &[f32],
+        _border_mode: BorderTypes,
+        _border_value: Scalar<Self>,
+    ) -> bool {
+        false
+    }
+
+    /// Remap a row with nearest neighbor interpolation.
+    #[allow(clippy::too_many_arguments)]
+    fn simd_remap_nearest_row(
+        _dst_row: &mut [Self],
+        _src: &[Self],
+        _src_cols: usize,
+        _src_rows: usize,
+        _channels: usize,
+        _map1_row: &[f32],
+        _map2_row: &[f32],
+        _border_mode: BorderTypes,
+        _border_value: Scalar<Self>,
+    ) -> bool {
         false
     }
 }
@@ -536,6 +570,126 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_remap_bilinear_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col];
+                    let y = map2_row[col];
+
+                    let x1 = x.floor() as i32;
+                    let y1 = y.floor() as i32;
+                    let x2 = x1 + 1;
+                    let y2 = y1 + 1;
+
+                    let wx = x - x.floor();
+                    let wy = y - y.floor();
+
+                    let w00 = (1.0 - wx) * (1.0 - wy);
+                    let w10 = wx * (1.0 - wy);
+                    let w01 = (1.0 - wx) * wy;
+                    let w11 = wx * wy;
+
+                    let dst_idx = col * channels;
+
+                    if x1 >= 0 && x2 < src_cols as i32 && y1 >= 0 && y2 < src_rows as i32 {
+                        let idx00 = (y1 as usize * src_cols + x1 as usize) * channels;
+                        let idx10 = (y1 as usize * src_cols + x2 as usize) * channels;
+                        let idx01 = (y2 as usize * src_cols + x1 as usize) * channels;
+                        let idx11 = (y2 as usize * src_cols + x2 as usize) * channels;
+
+                        for c in 0..channels {
+                            let v00 = src[idx00 + c];
+                            let v10 = src[idx10 + c];
+                            let v01 = src[idx01 + c];
+                            let v11 = src[idx11 + c];
+                            dst_row[dst_idx + c] = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                        }
+                    } else {
+                        for c in 0..channels {
+                            let get_pixel = |ix: i32, iy: i32| -> f32 {
+                                let ix_interp =
+                                    border_interpolate(ix, src_cols as i32, border_mode);
+                                let iy_interp =
+                                    border_interpolate(iy, src_rows as i32, border_mode);
+                                if ix_interp >= 0 && iy_interp >= 0 {
+                                    src[(iy_interp as usize * src_cols + ix_interp as usize)
+                                        * channels
+                                        + c]
+                                } else {
+                                    border_value.v[c]
+                                }
+                            };
+
+                            let v00 = get_pixel(x1, y1);
+                            let v10 = get_pixel(x2, y1);
+                            let v01 = get_pixel(x1, y2);
+                            let v11 = get_pixel(x2, y2);
+                            dst_row[dst_idx + c] = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                        }
+                    }
+                }
+            });
+            true
+        }
+
+        fn simd_remap_nearest_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col];
+                    let y = map2_row[col];
+                    let ix = x.round() as i32;
+                    let iy = y.round() as i32;
+                    let dst_idx = col * channels;
+
+                    if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
+                        let src_idx = (iy as usize * src_cols + ix as usize) * channels;
+                        for c in 0..channels {
+                            dst_row[dst_idx + c] = src[src_idx + c];
+                        }
+                    } else {
+                        let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
+                        let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
+                        if ix_interp >= 0 && iy_interp >= 0 {
+                            let src_idx =
+                                (iy_interp as usize * src_cols + ix_interp as usize) * channels;
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = src[src_idx + c];
+                            }
+                        } else {
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = border_value.v[c];
+                            }
+                        }
+                    }
+                }
+            });
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -826,6 +980,126 @@ mod simd_impls {
             });
             true
         }
+
+        fn simd_remap_bilinear_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col] as f64;
+                    let y = map2_row[col] as f64;
+
+                    let x1 = x.floor() as i32;
+                    let y1 = y.floor() as i32;
+                    let x2 = x1 + 1;
+                    let y2 = y1 + 1;
+
+                    let wx = x - x.floor();
+                    let wy = y - y.floor();
+
+                    let w00 = (1.0 - wx) * (1.0 - wy);
+                    let w10 = wx * (1.0 - wy);
+                    let w01 = (1.0 - wx) * wy;
+                    let w11 = wx * wy;
+
+                    let dst_idx = col * channels;
+
+                    if x1 >= 0 && x2 < src_cols as i32 && y1 >= 0 && y2 < src_rows as i32 {
+                        let idx00 = (y1 as usize * src_cols + x1 as usize) * channels;
+                        let idx10 = (y1 as usize * src_cols + x2 as usize) * channels;
+                        let idx01 = (y2 as usize * src_cols + x1 as usize) * channels;
+                        let idx11 = (y2 as usize * src_cols + x2 as usize) * channels;
+
+                        for c in 0..channels {
+                            let v00 = src[idx00 + c];
+                            let v10 = src[idx10 + c];
+                            let v01 = src[idx01 + c];
+                            let v11 = src[idx11 + c];
+                            dst_row[dst_idx + c] = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                        }
+                    } else {
+                        for c in 0..channels {
+                            let get_pixel = |ix: i32, iy: i32| -> f64 {
+                                let ix_interp =
+                                    border_interpolate(ix, src_cols as i32, border_mode);
+                                let iy_interp =
+                                    border_interpolate(iy, src_rows as i32, border_mode);
+                                if ix_interp >= 0 && iy_interp >= 0 {
+                                    src[(iy_interp as usize * src_cols + ix_interp as usize)
+                                        * channels
+                                        + c]
+                                } else {
+                                    border_value.v[c]
+                                }
+                            };
+
+                            let v00 = get_pixel(x1, y1);
+                            let v10 = get_pixel(x2, y1);
+                            let v01 = get_pixel(x1, y2);
+                            let v11 = get_pixel(x2, y2);
+                            dst_row[dst_idx + c] = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                        }
+                    }
+                }
+            });
+            true
+        }
+
+        fn simd_remap_nearest_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col];
+                    let y = map2_row[col];
+                    let ix = x.round() as i32;
+                    let iy = y.round() as i32;
+                    let dst_idx = col * channels;
+
+                    if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
+                        let src_idx = (iy as usize * src_cols + ix as usize) * channels;
+                        for c in 0..channels {
+                            dst_row[dst_idx + c] = src[src_idx + c];
+                        }
+                    } else {
+                        let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
+                        let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
+                        if ix_interp >= 0 && iy_interp >= 0 {
+                            let src_idx =
+                                (iy_interp as usize * src_cols + ix_interp as usize) * channels;
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = src[src_idx + c];
+                            }
+                        } else {
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = border_value.v[c];
+                            }
+                        }
+                    }
+                }
+            });
+            true
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1060,6 +1334,128 @@ mod simd_impls {
                         }
                     }
                     dst[i] = acc;
+                }
+            });
+            true
+        }
+
+        fn simd_remap_bilinear_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col];
+                    let y = map2_row[col];
+
+                    let x1 = x.floor() as i32;
+                    let y1 = y.floor() as i32;
+                    let x2 = x1 + 1;
+                    let y2 = y1 + 1;
+
+                    let wx = x - x.floor();
+                    let wy = y - y.floor();
+
+                    let w00 = (1.0 - wx) * (1.0 - wy);
+                    let w10 = wx * (1.0 - wy);
+                    let w01 = (1.0 - wx) * wy;
+                    let w11 = wx * wy;
+
+                    let dst_idx = col * channels;
+
+                    if x1 >= 0 && x2 < src_cols as i32 && y1 >= 0 && y2 < src_rows as i32 {
+                        let idx00 = (y1 as usize * src_cols + x1 as usize) * channels;
+                        let idx10 = (y1 as usize * src_cols + x2 as usize) * channels;
+                        let idx01 = (y2 as usize * src_cols + x1 as usize) * channels;
+                        let idx11 = (y2 as usize * src_cols + x2 as usize) * channels;
+
+                        for c in 0..channels {
+                            let v00 = src[idx00 + c] as f32;
+                            let v10 = src[idx10 + c] as f32;
+                            let v01 = src[idx01 + c] as f32;
+                            let v11 = src[idx11 + c] as f32;
+                            let val = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                            dst_row[dst_idx + c] = val.clamp(0.0, 255.0).round() as u8;
+                        }
+                    } else {
+                        for c in 0..channels {
+                            let get_pixel = |ix: i32, iy: i32| -> f32 {
+                                let ix_interp =
+                                    border_interpolate(ix, src_cols as i32, border_mode);
+                                let iy_interp =
+                                    border_interpolate(iy, src_rows as i32, border_mode);
+                                if ix_interp >= 0 && iy_interp >= 0 {
+                                    src[(iy_interp as usize * src_cols + ix_interp as usize)
+                                        * channels
+                                        + c] as f32
+                                } else {
+                                    border_value.v[c] as f32
+                                }
+                            };
+
+                            let v00 = get_pixel(x1, y1);
+                            let v10 = get_pixel(x2, y1);
+                            let v01 = get_pixel(x1, y2);
+                            let v11 = get_pixel(x2, y2);
+                            let val = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                            dst_row[dst_idx + c] = val.clamp(0.0, 255.0).round() as u8;
+                        }
+                    }
+                }
+            });
+            true
+        }
+
+        fn simd_remap_nearest_row(
+            dst_row: &mut [Self],
+            src: &[Self],
+            src_cols: usize,
+            src_rows: usize,
+            channels: usize,
+            map1_row: &[f32],
+            map2_row: &[f32],
+            border_mode: BorderTypes,
+            border_value: Scalar<Self>,
+        ) -> bool {
+            let arch = pulp::Arch::new();
+            arch.dispatch(|| {
+                let dst_cols = dst_row.len() / channels;
+                for col in 0..dst_cols {
+                    let x = map1_row[col];
+                    let y = map2_row[col];
+                    let ix = x.round() as i32;
+                    let iy = y.round() as i32;
+                    let dst_idx = col * channels;
+
+                    if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
+                        let src_idx = (iy as usize * src_cols + ix as usize) * channels;
+                        for c in 0..channels {
+                            dst_row[dst_idx + c] = src[src_idx + c];
+                        }
+                    } else {
+                        let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
+                        let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
+                        if ix_interp >= 0 && iy_interp >= 0 {
+                            let src_idx =
+                                (iy_interp as usize * src_cols + ix_interp as usize) * channels;
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = src[src_idx + c];
+                            }
+                        } else {
+                            for c in 0..channels {
+                                dst_row[dst_idx + c] = border_value.v[c];
+                            }
+                        }
+                    }
                 }
             });
             true

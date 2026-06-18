@@ -408,4 +408,161 @@ mod calib3d_tests {
             tvec.data[2]
         );
     }
+
+    #[test]
+    fn test_init_undistort_rectify_map_identity() {
+        use crate::calib3d::init_undistort_rectify_map;
+        use crate::core::types::Size2i;
+        let cam = Matrix::from_vec(3, 3, 1, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        let dist = Matrix::from_vec(1, 4, 1, vec![0.0, 0.0, 0.0, 0.0]);
+        let (map1, map2) =
+            init_undistort_rectify_map(&cam, &dist, None, &cam, Size2i::new(2, 2)).unwrap();
+
+        assert_eq!(map1.data, vec![0.0f32, 1.0, 0.0, 1.0]);
+        assert_eq!(map2.data, vec![0.0f32, 0.0, 1.0, 1.0]);
+    }
+
+    fn generate_synthetic_fundamental_data() -> (Vec<Point2f>, Vec<Point2f>) {
+        use crate::calib3d::rodrigues;
+        // 12 synthetic 3D points in general positions (not coplanar)
+        let pts3d = vec![
+            [0.1, -0.2, 2.5],
+            [-0.3, 0.4, 3.0],
+            [0.5, 0.2, 2.0],
+            [-0.2, -0.5, 3.5],
+            [0.4, -0.4, 2.8],
+            [-0.1, 0.3, 2.2],
+            [0.3, 0.5, 3.2],
+            [-0.4, -0.2, 2.7],
+            [0.2, -0.1, 2.4],
+            [-0.2, 0.1, 3.1],
+            [0.1, 0.4, 2.9],
+            [-0.5, 0.5, 2.6],
+        ];
+
+        // Camera 1: Identity projection
+        let mut pts1 = Vec::new();
+        for p in &pts3d {
+            pts1.push(Point2f {
+                x: (p[0] / p[2]) as f32,
+                y: (p[1] / p[2]) as f32,
+            });
+        }
+
+        // Camera 2: Rotated using a general rotation vector and translated
+        let rvec = Matrix::from_vec(3, 1, 1, vec![0.15, -0.2, 0.1]);
+        let mut rmat = Matrix::<f64>::new(3, 3, 1);
+        rodrigues(&rvec, &mut rmat).unwrap();
+
+        let tx = 0.3;
+        let ty = -0.2;
+        let tz = 0.5;
+
+        let mut pts2 = Vec::new();
+        for p in &pts3d {
+            let x = p[0];
+            let y = p[1];
+            let z = p[2];
+            let x2 = rmat.data[0] * x + rmat.data[1] * y + rmat.data[2] * z + tx;
+            let y2 = rmat.data[3] * x + rmat.data[4] * y + rmat.data[5] * z + ty;
+            let z2 = rmat.data[6] * x + rmat.data[7] * y + rmat.data[8] * z + tz;
+            pts2.push(Point2f {
+                x: (x2 / z2) as f32,
+                y: (y2 / z2) as f32,
+            });
+        }
+
+        (pts1, pts2)
+    }
+
+    #[test]
+    fn test_find_fundamental_mat_8point() {
+        use crate::calib3d::{find_fundamental_mat, FundamentalMatMethod};
+        let (pts1, pts2) = generate_synthetic_fundamental_data();
+
+        let mut mask = Vec::new();
+        let f = find_fundamental_mat(
+            &pts1,
+            &pts2,
+            FundamentalMatMethod::FM_8POINT,
+            1.0,
+            0.99,
+            1000,
+            Some(&mut mask),
+        )
+        .unwrap();
+
+        assert_eq!(f.rows, 3);
+        assert_eq!(f.cols, 3);
+        assert_eq!(mask.len(), 12);
+        assert!(mask.iter().all(|&m| m == 1));
+
+        // Verify epipolar constraint x'^T * F * x = 0 (tolerance 1e-4)
+        for i in 0..12 {
+            let u1 = pts1[i].x as f64;
+            let v1 = pts1[i].y as f64;
+            let u2 = pts2[i].x as f64;
+            let v2 = pts2[i].y as f64;
+
+            let x2 = [u2, v2, 1.0];
+            let x1 = [u1, v1, 1.0];
+
+            let fx1 = [
+                f.data[0] * x1[0] + f.data[1] * x1[1] + f.data[2] * x1[2],
+                f.data[3] * x1[0] + f.data[4] * x1[1] + f.data[5] * x1[2],
+                f.data[6] * x1[0] + f.data[7] * x1[1] + f.data[8] * x1[2],
+            ];
+            let err = x2[0] * fx1[0] + x2[1] * fx1[1] + x2[2] * fx1[2];
+            assert!(err.abs() < 1e-4, "Error at point {i} is {err}");
+        }
+    }
+
+    #[test]
+    fn test_find_fundamental_mat_ransac() {
+        use crate::calib3d::{find_fundamental_mat, FundamentalMatMethod};
+        let (pts1, mut pts2) = generate_synthetic_fundamental_data();
+
+        // Add 2 outliers (perturb the last two points)
+        pts2[10].y += 5.0f32;
+        pts2[11].y += 5.0f32;
+
+        let mut mask = Vec::new();
+        let f = find_fundamental_mat(
+            &pts1,
+            &pts2,
+            FundamentalMatMethod::FM_RANSAC,
+            0.01,
+            0.99,
+            1000,
+            Some(&mut mask),
+        )
+        .unwrap();
+
+        // Verify epipolar constraint for inliers (tolerance 1e-3)
+        for i in 0..10 {
+            let u1 = pts1[i].x as f64;
+            let v1 = pts1[i].y as f64;
+            let u2 = pts2[i].x as f64;
+            let v2 = pts2[i].y as f64;
+
+            let x2 = [u2, v2, 1.0];
+            let x1 = [u1, v1, 1.0];
+
+            let fx1 = [
+                f.data[0] * x1[0] + f.data[1] * x1[1] + f.data[2] * x1[2],
+                f.data[3] * x1[0] + f.data[4] * x1[1] + f.data[5] * x1[2],
+                f.data[6] * x1[0] + f.data[7] * x1[1] + f.data[8] * x1[2],
+            ];
+            let err = x2[0] * fx1[0] + x2[1] * fx1[1] + x2[2] * fx1[2];
+            assert!(err.abs() < 1e-3, "Error at inlier {i} is {err}");
+        }
+
+        assert_eq!(mask.len(), 12);
+        // Clean points should be inliers (1), outliers should be 0
+        for (i, &val) in mask.iter().enumerate().take(10) {
+            assert_eq!(val, 1, "Expected inlier at {i}");
+        }
+        assert_eq!(mask[10], 0, "Expected outlier at 10");
+        assert_eq!(mask[11], 0, "Expected outlier at 11");
+    }
 }
