@@ -275,6 +275,8 @@ impl SimdElement for u64 {}
 #[cfg(feature = "simd")]
 mod simd_impls {
     use super::SimdElement;
+    use crate::core::types::{BorderTypes, Scalar};
+    use crate::core::utils::border_interpolate;
     use pulp::Arch;
 
     // -----------------------------------------------------------------------
@@ -668,22 +670,19 @@ mod simd_impls {
 
                     if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
                         let src_idx = (iy as usize * src_cols + ix as usize) * channels;
-                        for c in 0..channels {
-                            dst_row[dst_idx + c] = src[src_idx + c];
-                        }
+                        dst_row[dst_idx..dst_idx + channels]
+                            .copy_from_slice(&src[src_idx..src_idx + channels]);
                     } else {
                         let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
                         let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
                         if ix_interp >= 0 && iy_interp >= 0 {
                             let src_idx =
                                 (iy_interp as usize * src_cols + ix_interp as usize) * channels;
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = src[src_idx + c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&src[src_idx..src_idx + channels]);
                         } else {
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = border_value.v[c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&border_value.v[..channels]);
                         }
                     }
                 }
@@ -1078,22 +1077,19 @@ mod simd_impls {
 
                     if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
                         let src_idx = (iy as usize * src_cols + ix as usize) * channels;
-                        for c in 0..channels {
-                            dst_row[dst_idx + c] = src[src_idx + c];
-                        }
+                        dst_row[dst_idx..dst_idx + channels]
+                            .copy_from_slice(&src[src_idx..src_idx + channels]);
                     } else {
                         let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
                         let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
                         if ix_interp >= 0 && iy_interp >= 0 {
                             let src_idx =
                                 (iy_interp as usize * src_cols + ix_interp as usize) * channels;
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = src[src_idx + c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&src[src_idx..src_idx + channels]);
                         } else {
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = border_value.v[c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&border_value.v[..channels]);
                         }
                     }
                 }
@@ -1438,22 +1434,19 @@ mod simd_impls {
 
                     if ix >= 0 && ix < src_cols as i32 && iy >= 0 && iy < src_rows as i32 {
                         let src_idx = (iy as usize * src_cols + ix as usize) * channels;
-                        for c in 0..channels {
-                            dst_row[dst_idx + c] = src[src_idx + c];
-                        }
+                        dst_row[dst_idx..dst_idx + channels]
+                            .copy_from_slice(&src[src_idx..src_idx + channels]);
                     } else {
                         let ix_interp = border_interpolate(ix, src_cols as i32, border_mode);
                         let iy_interp = border_interpolate(iy, src_rows as i32, border_mode);
                         if ix_interp >= 0 && iy_interp >= 0 {
                             let src_idx =
                                 (iy_interp as usize * src_cols + ix_interp as usize) * channels;
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = src[src_idx + c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&src[src_idx..src_idx + channels]);
                         } else {
-                            for c in 0..channels {
-                                dst_row[dst_idx + c] = border_value.v[c];
-                            }
+                            dst_row[dst_idx..dst_idx + channels]
+                                .copy_from_slice(&border_value.v[..channels]);
                         }
                     }
                 }
