@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-06-27
+
+### ⚙️ Miscellaneous Tasks
+
+- Bump version to 0.5.0 in the [workspace.package] section of the Cargo.toml file after releasing
+
+### 📚 Documentation
+
+- *(features2d)* Document differences from OpenCV AKAZE matching and tracking tutorials (#75)
+- Improve features2d documentation and update roadmap
+
+### 🚀 Features
+
+- *(features2d)* Implement BFMatcher, DMatch and drawing utilities (#75)
+
 ## [0.5.0] - 2026-05-28
 
 ### 📚 Documentation

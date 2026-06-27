@@ -3,6 +3,8 @@
 This is the official WebAssembly binding for **PureCV**, providing high-performance, pure-Rust image processing and computer vision functions directly in the browser and Node.js.
 
 [![NPM version](https://img.shields.io/npm/v/@webarkit/purecv-wasm.svg)](https://www.npmjs.com/package/@webarkit/purecv-wasm)
+[![GitHub Stars](https://img.shields.io/github/stars/webarkit/purecv.svg?style=social)](https://github.com/webarkit/purecv/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/webarkit/purecv.svg?style=social)](https://github.com/webarkit/purecv/network/members)
 
 ## Dual-Build Architecture
 
