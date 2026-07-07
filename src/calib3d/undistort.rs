@@ -44,13 +44,49 @@ use rayon::prelude::*;
 /// Computes the undistortion and rectification transformation map.
 ///
 /// The function computes the joint undistortion and rectification transformation map
-/// and stores the result in map1 and map2.
+/// and stores the result in `map1` and `map2`.
 ///
-/// * `camera_matrix` - Input camera matrix.
-/// * `dist_coeffs` - Input vector of distortion coefficients.
-/// * `r` - Optional rectification transformation in object space (3x3 matrix).
+/// # Arguments
+///
+/// * `camera_matrix` - Input camera matrix (3x3).
+/// * `dist_coeffs` - Input vector of distortion coefficients (k1, k2, p1, p2, k3, k4, k5, k6).
+/// * `r` - Optional rectification transformation in object space (3x3 matrix). If `None`, identity is used.
 /// * `new_camera_matrix` - New camera matrix (3x3).
 /// * `size` - Undistorted image size.
+///
+/// # Returns
+///
+/// Returns a `Result<(Matrix<f32>, Matrix<f32>)>` containing the computed maps `map1` and `map2`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * `camera_matrix`, `new_camera_matrix`, or `r` (if provided) are not 3x3 single-channel matrices.
+///
+/// # Examples
+///
+/// ```
+/// use purecv::core::{Matrix, types::Size2i};
+/// use purecv::calib3d::undistort::init_undistort_rectify_map;
+///
+/// let mut camera_matrix = Matrix::<f64>::new(3, 3, 1);
+/// camera_matrix.data[0] = 800.0; // fx
+/// camera_matrix.data[4] = 800.0; // fy
+/// camera_matrix.data[2] = 320.0; // cx
+/// camera_matrix.data[5] = 240.0; // cy
+/// camera_matrix.data[8] = 1.0;
+///
+/// let dist_coeffs = Matrix::<f64>::new(1, 5, 1); // e.g., k1, k2, p1, p2, k3
+/// let size = Size2i::new(640, 480);
+/// 
+/// let (map1, map2) = init_undistort_rectify_map(
+///     &camera_matrix,
+///     &dist_coeffs,
+///     None,
+///     &camera_matrix,
+///     size
+/// ).unwrap();
+/// ```
 pub fn init_undistort_rectify_map(
     camera_matrix: &Matrix<f64>,
     dist_coeffs: &Matrix<f64>,

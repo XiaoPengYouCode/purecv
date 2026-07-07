@@ -49,15 +49,55 @@ pub enum FundamentalMatMethod {
 
 /// Calculates a fundamental matrix from the corresponding points in two images.
 ///
+/// # Arguments
+///
 /// * `points1` - Array of N points from the first image.
 /// * `points2` - Array of N points from the second image.
-/// * `method` - Method for computing the fundamental matrix.
+/// * `method` - Method for computing the fundamental matrix (e.g., `FundamentalMatMethod::FM_RANSAC`).
 /// * `ransac_reproj_threshold` - Parameter used only for RANSAC. It denotes the maximum
 ///   distance from a point to its epipolar line in pixels.
 /// * `confidence` - Parameter used only for RANSAC. It denotes the confidence level
 ///   that the estimated matrix is correct.
 /// * `max_iters` - Maximum number of iterations for RANSAC.
-/// * `mask` - Output mask of inliers/outliers (1 for inliers, 0 for outliers).
+/// * `mask` - Optional output mask of inliers/outliers (1 for inliers, 0 for outliers).
+///
+/// # Returns
+///
+/// Returns a `Result<Matrix<f64>>` containing the computed 3x3 fundamental matrix.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * `points1` and `points2` have different lengths.
+/// * There are fewer than 8 point correspondences.
+/// * The RANSAC algorithm fails to find a valid fundamental matrix model.
+/// * The null space vector computation fails (8-point algorithm).
+///
+/// # Examples
+///
+/// ```
+/// use purecv::core::types::Point2f;
+/// use purecv::calib3d::fundamental::{find_fundamental_mat, FundamentalMatMethod};
+///
+/// let points1 = vec![
+///     Point2f::new(0.0, 0.0), Point2f::new(1.0, 0.0),
+///     Point2f::new(0.0, 1.0), Point2f::new(1.0, 1.0),
+///     Point2f::new(0.5, 0.5), Point2f::new(0.2, 0.8),
+///     Point2f::new(0.8, 0.2), Point2f::new(0.3, 0.3),
+/// ];
+/// let points2 = points1.clone(); // In practice, these would be matched points
+///
+/// let mut mask = Vec::new();
+/// let f_mat = find_fundamental_mat(
+///     &points1,
+///     &points2,
+///     FundamentalMatMethod::FM_8POINT,
+///     3.0,
+///     0.99,
+///     1000,
+///     Some(&mut mask),
+/// ).unwrap();
+/// ```
 pub fn find_fundamental_mat(
     points1: &[Point2f],
     points2: &[Point2f],

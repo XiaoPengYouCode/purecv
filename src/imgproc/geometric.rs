@@ -57,12 +57,44 @@ pub enum InterpolationFlags {
 /// The function `remap` transforms the source image using the specified map:
 /// `dst(x,y) = src(map1(x,y), map2(x,y))`
 ///
-/// * `src` - Source image.
-/// * `map1` - The first map of either (x,y) points or just x values having the type f32.
-/// * `map2` - The second map of y values having the type f32.
-/// * `interpolation` - Interpolation method.
-/// * `border_mode` - Pixel extrapolation method.
+/// # Arguments
+///
+/// * `src` - Source image as a `Matrix<T>`.
+/// * `map1` - The first map of either `(x,y)` points or just `x` values, with type `f32`.
+/// * `map2` - The second map of `y` values with type `f32`.
+/// * `interpolation` - Interpolation method to use (e.g., `InterpolationFlags::Linear`).
+/// * `border_mode` - Pixel extrapolation method (e.g., `BorderTypes::Constant`).
 /// * `border_value` - Value used in case of a constant border.
+///
+/// # Returns
+///
+/// Returns a `Result<Matrix<T>>` containing the transformed image.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * `map1` and `map2` do not have the same dimensions.
+/// * `map1` or `map2` are not single-channel matrices.
+///
+/// # Examples
+///
+/// ```
+/// use purecv::core::{Matrix, types::{BorderTypes, Scalar}};
+/// use purecv::imgproc::geometric::{remap, InterpolationFlags};
+///
+/// let src = Matrix::<u8>::new(10, 10, 1);
+/// let map1 = Matrix::<f32>::new(10, 10, 1);
+/// let map2 = Matrix::<f32>::new(10, 10, 1);
+/// 
+/// let result = remap(
+///     &src,
+///     &map1,
+///     &map2,
+///     InterpolationFlags::Linear,
+///     BorderTypes::Constant,
+///     Scalar::all(0)
+/// ).unwrap();
+/// ```
 pub fn remap<T>(
     src: &Matrix<T>,
     map1: &Matrix<f32>,
@@ -199,12 +231,43 @@ where
 /// The function `warp_perspective` transforms the source image using the specified matrix:
 /// `dst(x,y) = src((M_00*x + M_01*y + M_02)/(M_20*x + M_21*y + M_22), (M_10*x + M_11*y + M_12)/(M_20*x + M_21*y + M_22))`
 ///
+/// # Arguments
+///
 /// * `src` - Source image.
-/// * `m` - 3x3 transformation matrix.
+/// * `m` - 3x3 perspective transformation matrix (`f64`).
 /// * `dsize` - Size of the destination image.
-/// * `flags` - Interpolation method.
-/// * `border_mode` - Pixel extrapolation method.
+/// * `flags` - Interpolation method to use (e.g., `InterpolationFlags::Linear`).
+/// * `border_mode` - Pixel extrapolation method (e.g., `BorderTypes::Constant`).
 /// * `border_value` - Value used in case of a constant border.
+///
+/// # Returns
+///
+/// Returns a `Result<Matrix<T>>` containing the perspective-transformed image.
+///
+/// # Errors
+///
+/// Returns an error if the homography matrix `m` is not a 3x3 single-channel matrix.
+///
+/// # Examples
+///
+/// ```
+/// use purecv::core::{Matrix, types::{BorderTypes, Scalar, Size2i}};
+/// use purecv::imgproc::geometric::{warp_perspective, InterpolationFlags};
+///
+/// let src = Matrix::<u8>::new(10, 10, 1);
+/// let mut m = Matrix::<f64>::new(3, 3, 1);
+/// // Set identity matrix for example
+/// m.data[0] = 1.0; m.data[4] = 1.0; m.data[8] = 1.0;
+/// 
+/// let result = warp_perspective(
+///     &src,
+///     &m,
+///     Size2i::new(10, 10),
+///     InterpolationFlags::Linear,
+///     BorderTypes::Constant,
+///     Scalar::all(0)
+/// ).unwrap();
+/// ```
 pub fn warp_perspective<T>(
     src: &Matrix<T>,
     m: &Matrix<f64>,
