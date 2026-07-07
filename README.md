@@ -44,7 +44,7 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **Utilities:** `add_weighted`, `check_range`, `absdiff`, `get_tick_count`, `get_tick_frequency`.
 - **Mathematical Constants:** OpenCV-compatible constants — `CV_PI`, `CV_PI_2`, `CV_2PI`, `CV_PI_4`, `CV_LOG2`, `CV_LN2`, `CV_E`, `CV_LN10`, `CV_SQRT2` — backed by `std::f64::consts` for maximum precision.
 - **ndarray Interop:** Optional, zero-cost conversions to/from `ndarray::Array3` via the `ndarray` feature flag.
-- **SIMD Acceleration** (`simd` feature): Trait-based dispatch via `pulp` for `f32`, `f64`, and `u8` types. Accelerated operations include `add`, `sub`, `mul`, `div`, `min`, `max`, `sqrt`, `dot`, `sum`, `add_weighted`, `convert_scale_abs`, `magnitude`, `simd_row_min_max`, `simd_min_max_col`, and `simd_gaussian_5tap_h/v`. Falls back to scalar loops at zero cost when disabled.
+- **SIMD Acceleration** (`simd` feature): Trait-based dispatch via `pulp` for `f32`, `f64`, and `u8` types. Accelerated operations include `add`, `sub`, `mul`, `div`, `min`, `max`, `sqrt`, `dot`, `sum`, `add_weighted`, `convert_scale_abs`, `magnitude`, `simd_row_min_max`, `simd_min_max_col`, `simd_gaussian_5tap_h/v`, and `simd_remap_bilinear_row`/`simd_remap_nearest_row`. Falls back to scalar loops at zero cost when disabled.
 
 ### `purecv-imgproc`
 - **Color Conversions:** High-performance `cvt_color` supporting RGB, BGR, Gray, RGBA, BGRA and more. Up to **6.6× speedup** with Parallel + SIMD. SIMD-accelerated paths (`simd` feature) use fixed-point integer arithmetic (coefficients 77/150/29 ≈ 0.299/0.587/0.114 × 256) for all `*_to_gray` conversions — portable to x86 SSE/AVX, ARM NEON, and WASM `simd128` via `pulp`.
@@ -56,6 +56,7 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **Feature Detection:** `corner_harris`, `corner_min_eigen_val` (Shi-Tomasi), `good_features_to_track`, `corner_sub_pix` refinement, and structure tensor computation via `corner_eigen_vals_and_vecs`. Supports both Harris and Shi-Tomasi responses with non-maximum suppression.
 - **Hough Transform:** Standard (`hough_lines`) and Probabilistic (`hough_lines_p`) line detection, plus Hough Circle Transform (`hough_circles`) using internally computed Sobel gradients. Fully parallelized via the `parallel` feature.
 - **Resizing:** `resize` function utilizing high-performance bilinear interpolation, fully compatible with `parallel` Rayon multi-threading.
+- **Geometric Transformations:** `remap` (with bilinear and nearest-neighbor interpolation) and `warp_perspective` (perspective transformations) fully parallelized and SIMD-accelerated.
 
 ### `purecv-features2d`
 - **FAST Feature Detector:** Real-time corner detector (`FastFeatureDetector`) supporting Type 5_8, 7_12, and 9_16 neighborhood configurations, plus optional non-maximum suppression.
@@ -67,6 +68,8 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **Optical Flow:** Pyramidal Lucas-Kanade optical flow implementation with `calc_optical_flow_pyr_lk` and `build_optical_flow_pyramid`. Includes robust window-based tracking, sub-pixel accuracy, spatial gradient optimization, and iterative refinement.
 
 ### `purecv-calib3d`
+- **Camera Undistortion:** `init_undistort_rectify_map` to compute lens undistortion and rectification maps.
+- **Epipolar Geometry:** `find_fundamental_mat` supporting the normalized 8-Point algorithm and robust RANSAC estimation with Sampson distance.
 - **Pose Estimation:** Camera pose estimation using `solve_pnp` (Iterative) and `solve_pnp_ransac`.
 - **Homography:** Direct Linear Transformation (DLT) and RANSAC-based `find_homography` for robust planar perspective mapping.
 - **Geometry:** `rodrigues` for converting between rotation vectors and 3x3 rotation matrices.
@@ -250,6 +253,9 @@ cargo run --example optical_flow_video
 
 # Pose Estimation (solve_pnp and rodrigues)
 cargo run --example pose_estimation
+
+# Camera Undistortion and Perspective Warping
+cargo run --example rectification
 ```
 
 ## 🧪 Testing & Benchmarking
