@@ -85,19 +85,43 @@
 //! # }
 //! ```
 //!
+//! ### 3. Feature Matching (Brute-Force)
+//!
+//! ```rust
+//! # use purecv::core::Matrix;
+//! # use purecv::features2d::{Orb, BFMatcher, DescriptorMatcher, NormType, DMatch};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Assume descriptors1 and descriptors2 are computed from Orb
+//! let descriptors1 = Matrix::<u8>::zeros(100, 32, 1);
+//! let descriptors2 = Matrix::<u8>::zeros(100, 32, 1);
+//!
+//! // Create a Brute-Force Matcher using Hamming distance (for binary descriptors like ORB)
+//! let matcher = BFMatcher::new(NormType::NormHamming, true)?;
+//!
+//! // Match descriptors
+//! let matches: Vec<DMatch> = matcher.match_descriptors(&descriptors1, &descriptors2)?;
+//! println!("Found {} matches", matches.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## 📚 Reference & Standards
 //!
 //! - **OpenCV Parity**: Matches the structures and parameter ranges of OpenCV's `cv::Feature2D`, `cv::FastFeatureDetector`, and `cv::ORB`.
 //! - **Reference Source**: [OpenCV features2d module group](https://docs.opencv.org/4.10.0/d5/d51/group__features2d__main.html)
 
 pub mod bit_pattern_31;
+pub mod draw;
 pub mod fast;
 pub mod keypoint;
+pub mod matcher;
 pub mod orb;
 
 pub use bit_pattern_31::BIT_PATTERN_31;
+pub use draw::{draw_keypoints, draw_matches};
 pub use fast::{FastFeatureDetector, FastType};
 pub use keypoint::KeyPoint;
+pub use matcher::{filter_matches, BFMatcher, DMatch, DescriptorMatcher, NormType};
 pub use orb::{
     build_orb_pyramid, compute_orb_descriptor, compute_orientation, precompute_umax, Orb, ScoreType,
 };
