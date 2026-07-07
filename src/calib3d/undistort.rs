@@ -78,7 +78,7 @@ use rayon::prelude::*;
 ///
 /// let dist_coeffs = Matrix::<f64>::new(1, 5, 1); // e.g., k1, k2, p1, p2, k3
 /// let size = Size2i::new(640, 480);
-/// 
+///
 /// let (map1, map2) = init_undistort_rectify_map(
 ///     &camera_matrix,
 ///     &dist_coeffs,

@@ -85,7 +85,7 @@ pub enum InterpolationFlags {
 /// let src = Matrix::<u8>::new(10, 10, 1);
 /// let map1 = Matrix::<f32>::new(10, 10, 1);
 /// let map2 = Matrix::<f32>::new(10, 10, 1);
-/// 
+///
 /// let result = remap(
 ///     &src,
 ///     &map1,
@@ -258,7 +258,7 @@ where
 /// let mut m = Matrix::<f64>::new(3, 3, 1);
 /// // Set identity matrix for example
 /// m.data[0] = 1.0; m.data[4] = 1.0; m.data[8] = 1.0;
-/// 
+///
 /// let result = warp_perspective(
 ///     &src,
 ///     &m,
