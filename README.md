@@ -314,7 +314,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
 
 ## 🗺 Roadmap
 
-- [ ] [**Milestone 7: Geometric Rectification & Calibration**](https://github.com/webarkit/purecv/milestone/7) - Expand purecv to support camera intrinsic correction and geometric transformation, essential for robust 3D pose estimation and AR surface tracking.
+- [x] [**Milestone 7: Geometric Rectification & Calibration**](https://github.com/webarkit/purecv/milestone/7) - Expand purecv to support camera intrinsic correction and geometric transformation, essential for robust 3D pose estimation and AR surface tracking.
 
 ## 📄 License
 
