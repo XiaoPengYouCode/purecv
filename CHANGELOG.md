@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1] - 2026-07-08
+
+### 🎨 Styling
+
+- *(examples)* Format rectification.rs example code
+- Fix rustdoc formatting (trailing spaces)
+
+### 🐛 Bug Fixes
+
+- *(simd)* Fix imports and clippy warnings with simd feature enabled (#76)
+
+### 💼 Other
+
+- *(wasm)* Remove unnecessary CARGO_HTTP_CHECK_REVOKE override
+
+### 📚 Documentation
+
+- Add PR #78 features to README (remap, undistort, fundamental_mat)
+- Improve rustdoc for new calib3d and imgproc geometric functions
+
+### 🕸️ WebAssembly & Emscripten
+
+- *(wasm)* Expose undistort, remap, warp perspective, and add calibration example
+
+### 🚀 Features
+
+- *(calib3d)* Implement camera undistortion, perspective warping, and fundamental matrix estimation (#76)
+- *(examples)* Add rectification and perspective warp example (#76)
+
 ## [0.6.0] - 2026-06-27
 
 ### ⚙️ Miscellaneous Tasks
