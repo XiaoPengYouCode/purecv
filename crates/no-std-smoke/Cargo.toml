@@ -1,0 +1,13 @@
+[package]
+name = "purecv-no-std-smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Build-only smoke test: consumes the purecv public API from a no_std crate (see issue #83)."
+
+[dependencies]
+purecv = { path = "../..", default-features = false }
+
+# Standalone workspace root: keeps this build-only crate out of both the
+# purecv workspace and any enclosing one.
+[workspace]
