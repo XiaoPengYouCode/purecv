@@ -34,19 +34,29 @@
  *
  */
 
+#[cfg(feature = "std")]
 use std::sync::OnceLock;
+#[cfg(feature = "std")]
 use std::time::Instant;
 
+#[cfg(feature = "std")]
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 /// Returns the number of ticks.
 /// In this implementation, it returns the number of nanoseconds since the first call.
+///
+/// Requires the `std` feature: bare-metal targets have no portable clock,
+/// so embedded users should rely on their platform timer instead.
+#[cfg(feature = "std")]
 pub fn get_tick_count() -> i64 {
     let start = *START_TIME.get_or_init(Instant::now);
     start.elapsed().as_nanos() as i64
 }
 
 /// Returns the number of ticks per second.
+///
+/// Requires the `std` feature (see [`get_tick_count`]).
+#[cfg(feature = "std")]
 pub fn get_tick_frequency() -> f64 {
     1_000_000_000.0
 }
@@ -158,13 +168,13 @@ pub trait ParIterFallback<'a, T: 'a> {
 
     fn par_iter(&'a self) -> Self::Iter;
     fn par_iter_mut(&'a mut self) -> Self::IterMut;
-    fn par_chunks_mut(&'a mut self, size: usize) -> std::slice::ChunksMut<'a, T>;
+    fn par_chunks_mut(&'a mut self, size: usize) -> core::slice::ChunksMut<'a, T>;
 }
 
 #[cfg(not(feature = "parallel"))]
 impl<'a, T: 'a> ParIterFallback<'a, T> for [T] {
-    type Iter = std::slice::Iter<'a, T>;
-    type IterMut = std::slice::IterMut<'a, T>;
+    type Iter = core::slice::Iter<'a, T>;
+    type IterMut = core::slice::IterMut<'a, T>;
 
     fn par_iter(&'a self) -> Self::Iter {
         self.iter()
@@ -172,7 +182,7 @@ impl<'a, T: 'a> ParIterFallback<'a, T> for [T] {
     fn par_iter_mut(&'a mut self) -> Self::IterMut {
         self.iter_mut()
     }
-    fn par_chunks_mut(&'a mut self, size: usize) -> std::slice::ChunksMut<'a, T> {
+    fn par_chunks_mut(&'a mut self, size: usize) -> core::slice::ChunksMut<'a, T> {
         self.chunks_mut(size)
     }
 }

@@ -34,17 +34,30 @@
  *
  */
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
 // Global modules
+//
+// Only `core` and `version` build without `std` for now; the remaining modules
+// are gated until their own no_std phases land (see issue #82).
+#[cfg(feature = "std")]
 pub mod calib3d;
 pub mod core;
+#[cfg(feature = "std")]
 pub mod features;
+#[cfg(feature = "std")]
 pub mod features2d;
+#[cfg(feature = "std")]
 pub mod imgproc;
 pub mod version;
+#[cfg(feature = "std")]
 pub mod video;
 
 /// Prelude to easily import common structures
 pub mod prelude {
+    #[cfg(feature = "std")]
     pub use crate::calib3d::{
         find_fundamental_mat, find_homography, init_undistort_rectify_map, rodrigues, solve_pnp,
         solve_pnp_ransac, FundamentalMatMethod, HomographyMethod, SolvePnPMethod,
@@ -55,21 +68,29 @@ pub mod prelude {
         Vec3s, Vec4b, Vec4d, Vec4f, Vec4i, Vec4s, Vec6d, Vec6f, VecN,
     };
     pub use crate::core::Matrix;
+    #[cfg(feature = "std")]
     pub use crate::features2d::{
         draw_keypoints, draw_matches, filter_matches, BFMatcher, DMatch, DescriptorMatcher,
         FastFeatureDetector, FastType, KeyPoint, NormType, Orb,
     };
+    #[cfg(feature = "std")]
     pub use crate::imgproc::derivatives::{laplacian, scharr, sobel};
+    #[cfg(feature = "std")]
     pub use crate::imgproc::edge::canny;
+    #[cfg(feature = "std")]
     pub use crate::imgproc::feature::{
         corner_eigen_vals_and_vecs, corner_harris, corner_min_eigen_val, corner_sub_pix,
         good_features_to_track, pre_corner_detect,
     };
+    #[cfg(feature = "std")]
     pub use crate::imgproc::filter::{bilateral_filter, box_filter, gaussian_blur};
+    #[cfg(feature = "std")]
     pub use crate::imgproc::threshold::{threshold, ThresholdTypes};
+    #[cfg(feature = "std")]
     pub use crate::imgproc::{
         cvt_color, remap, warp_perspective, ColorConversionCode, InterpolationFlags,
     };
+    #[cfg(feature = "std")]
     pub use crate::video::optical_flow::{
         build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, OpticalFlowPyramid,
         OPTFLOW_LK_GET_MIN_EIGENVALS, OPTFLOW_USE_INITIAL_FLOW,

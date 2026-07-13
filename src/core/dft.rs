@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::vec;
+
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 

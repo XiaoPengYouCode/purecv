@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::vec;
+
 use crate::core::constants::CV_PI;
 use crate::core::error::{PureCvError, Result};
 use crate::core::matrix::Matrix;

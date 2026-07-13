@@ -36,32 +36,32 @@
 
 //! Mathematical constants mirroring OpenCV's C++ `CV_PI`, `CV_2PI`, etc.
 //!
-//! All values are `pub const f64` backed by [`std::f64::consts`] for
+//! All values are `pub const f64` backed by [`core::f64::consts`] for
 //! maximum precision and cross-platform reproducibility.
 
-/// Pi (same as `std::f64::consts::PI`).
-pub const CV_PI: f64 = std::f64::consts::PI;
+/// Pi (same as `core::f64::consts::PI`).
+pub const CV_PI: f64 = core::f64::consts::PI;
 
-/// Pi divided by 2 (same as `std::f64::consts::FRAC_PI_2`).
-pub const CV_PI_2: f64 = std::f64::consts::FRAC_PI_2;
+/// Pi divided by 2 (same as `core::f64::consts::FRAC_PI_2`).
+pub const CV_PI_2: f64 = core::f64::consts::FRAC_PI_2;
 
 /// 2 * Pi — full circle in radians.
-pub const CV_2PI: f64 = 2.0 * std::f64::consts::PI;
+pub const CV_2PI: f64 = 2.0 * core::f64::consts::PI;
 
-/// Pi divided by 4 (same as `std::f64::consts::FRAC_PI_4`).
-pub const CV_PI_4: f64 = std::f64::consts::FRAC_PI_4;
+/// Pi divided by 4 (same as `core::f64::consts::FRAC_PI_4`).
+pub const CV_PI_4: f64 = core::f64::consts::FRAC_PI_4;
 
-/// Log base 2 of e (same as `std::f64::consts::LOG2_E`).
-pub const CV_LOG2: f64 = std::f64::consts::LOG2_E;
+/// Log base 2 of e (same as `core::f64::consts::LOG2_E`).
+pub const CV_LOG2: f64 = core::f64::consts::LOG2_E;
 
-/// Natural logarithm of 2 (same as `std::f64::consts::LN_2`).
-pub const CV_LN2: f64 = std::f64::consts::LN_2;
+/// Natural logarithm of 2 (same as `core::f64::consts::LN_2`).
+pub const CV_LN2: f64 = core::f64::consts::LN_2;
 
-/// Square root of 2 (same as `std::f64::consts::SQRT_2`).
-pub const CV_SQRT2: f64 = std::f64::consts::SQRT_2;
+/// Square root of 2 (same as `core::f64::consts::SQRT_2`).
+pub const CV_SQRT2: f64 = core::f64::consts::SQRT_2;
 
-/// Euler's number (same as `std::f64::consts::E`).
-pub const CV_E: f64 = std::f64::consts::E;
+/// Euler's number (same as `core::f64::consts::E`).
+pub const CV_E: f64 = core::f64::consts::E;
 
-/// Natural logarithm of 10 (same as `std::f64::consts::LN_10`).
-pub const CV_LN10: f64 = std::f64::consts::LN_10;
+/// Natural logarithm of 10 (same as `core::f64::consts::LN_10`).
+pub const CV_LN10: f64 = core::f64::consts::LN_10;

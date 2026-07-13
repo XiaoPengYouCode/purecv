@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::{format, vec, vec::Vec};
+
 use crate::core::error::{PureCvError, Result};
 use crate::core::matrix::{Depth, MatType, Matrix};
 

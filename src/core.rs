@@ -86,6 +86,7 @@ pub use self::matrix::{
     CV_8SC1, CV_8SC2, CV_8SC3, CV_8SC4, CV_8U, CV_8UC1, CV_8UC2, CV_8UC3, CV_8UC4,
 };
 pub use self::metrics::{mahalanobis, psnr};
+#[cfg(feature = "std")]
 pub use self::rng::{rand_shuffle, randn, randu, set_rng_seed};
 pub use self::solvers::{solve_cubic, solve_quadratic};
 pub use self::types::{
@@ -96,6 +97,8 @@ pub use self::types::{
     KMEANS_RANDOM_CENTERS, KMEANS_USE_INITIAL_LABELS, SORT_ASCENDING, SORT_DESCENDING,
     SORT_EVERY_COLUMN, SORT_EVERY_ROW,
 };
+pub use self::utils::border_interpolate;
 #[cfg(not(feature = "parallel"))]
 pub use self::utils::ParIterFallback;
-pub use self::utils::{border_interpolate, get_tick_count, get_tick_frequency};
+#[cfg(feature = "std")]
+pub use self::utils::{get_tick_count, get_tick_frequency};

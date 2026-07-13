@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::{format, string::ToString, vec::Vec};
+
 use crate::core::error::{PureCvError, Result};
 use crate::core::types::Scalar;
 use crate::core::Matrix;

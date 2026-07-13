@@ -33,8 +33,10 @@
  *  Author(s): Walter Perdan @kalwalt https://github.com/kalwalt
  *
  */
+
 use crate::core::error::{PureCvError, Result};
 use crate::core::types::Scalar;
+use alloc::{format, vec, vec::Vec};
 
 /// Matrix depth: number of bits per element and its signedness/type.
 /// Follows OpenCV's depth conventions (CV_8U, CV_32F, etc.).
@@ -545,7 +547,7 @@ impl<T: Default + Clone> Matrix<T> {
     ///
     /// * `other` - The matrix with which to swap references logic correctly.
     pub fn swap(&mut self, other: &mut Self) {
-        std::mem::swap(self, other);
+        core::mem::swap(self, other);
     }
 
     /// Returns a raw immutable pointer to the start of the underlying data
@@ -592,9 +594,14 @@ impl<T: Default + Clone> Matrix<T> {
     pub fn copy_to(&self, dst: &mut Matrix<T>) -> Result<()> {
         if self.rows != dst.rows || self.cols != dst.cols || self.channels != dst.channels {
             #[cfg(debug_assertions)]
-            eprintln!(
+            log::warn!(
                 "[purecv::copy_to] dst resized from {}x{}x{} to {}x{}x{}",
-                dst.rows, dst.cols, dst.channels, self.rows, self.cols, self.channels
+                dst.rows,
+                dst.cols,
+                dst.channels,
+                self.rows,
+                self.cols,
+                self.channels
             );
             dst.rows = self.rows;
             dst.cols = self.cols;
@@ -672,7 +679,7 @@ impl<T: num_traits::Zero + num_traits::One + Default + Clone> Matrix<T> {
     /// Following OpenCV, the diagonal has value 1 and others are 0.
     pub fn eye(rows: usize, cols: usize, channels: usize) -> Self {
         let mut mat = Self::zeros(rows, cols, channels);
-        let min_dim = std::cmp::min(rows, cols);
+        let min_dim = core::cmp::min(rows, cols);
         for i in 0..min_dim {
             for c in 0..channels {
                 mat.set(i, i, c, T::one());

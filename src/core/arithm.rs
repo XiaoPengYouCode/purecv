@@ -34,12 +34,19 @@
  *
  */
 
+// `num_traits::Float` provides `sqrt`, `sin`, ... on `f32`/`f64` via libm
+// when `std` is disabled; with `std` the inherent methods win, so the
+// import is only "used" in no_std builds.
+use alloc::{format, string::ToString, vec, vec::Vec};
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::core::constants::CV_2PI;
 use crate::core::error::{PureCvError, Result};
 use crate::core::types::{CmpTypes, NormTypes, ReduceTypes, Scalar};
 use crate::core::{DataType, Matrix};
+use core::ops::{BitAnd, BitOr, BitXor, Not, Sub};
 use num_traits::{Bounded, FromPrimitive, Num, SaturatingAdd, SaturatingSub, ToPrimitive};
-use std::ops::{BitAnd, BitOr, BitXor, Not, Sub};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -64,7 +71,7 @@ macro_rules! binary_op {
         #[cfg(feature = "simd")]
         {
             // SIMD fast-path: only when dst type == src type and type has SIMD support
-            if std::any::TypeId::of::<$t_dst>() == std::any::TypeId::of::<$t_src>()
+            if core::any::TypeId::of::<$t_dst>() == core::any::TypeId::of::<$t_src>()
                 && <$t_src as SimdElement>::has_simd()
             {
                 // Try the SIMD kernel. If it returns false, fall back to scalar.
@@ -73,7 +80,7 @@ macro_rules! binary_op {
                 #[cfg(feature = "parallel")]
                 {
                     use rayon::prelude::*;
-                    use std::sync::atomic::{AtomicBool, Ordering};
+                    use core::sync::atomic::{AtomicBool, Ordering};
 
                     let chunk_size = ($dst.data.len() / rayon::current_num_threads()).max(1024);
                     let all_ok = AtomicBool::new(true);
@@ -87,7 +94,7 @@ macro_rules! binary_op {
                             // Transmute the dst chunk to $t_src for the SIMD call
                             // This is safe because we verified $t_dst == $t_src above
                             let dst_as_src: &mut [$t_src] = unsafe {
-                                std::slice::from_raw_parts_mut(
+                                core::slice::from_raw_parts_mut(
                                     dst_chunk.as_mut_ptr() as *mut $t_src,
                                     len,
                                 )
@@ -107,7 +114,7 @@ macro_rules! binary_op {
                 #[cfg(not(feature = "parallel"))]
                 {
                     let dst_as_src: &mut [$t_src] = unsafe {
-                        std::slice::from_raw_parts_mut(
+                        core::slice::from_raw_parts_mut(
                             $dst.data.as_mut_ptr() as *mut $t_src,
                             $dst.data.len(),
                         )
@@ -215,7 +222,7 @@ macro_rules! unary_op {
     ($dst:expr, $src:expr, $t_dst:ty, $t_src:ty, |$d:ident, $s:ident| $body:expr, simd: $simd_fn:ident) => {
         #[cfg(feature = "simd")]
         {
-            if std::any::TypeId::of::<$t_dst>() == std::any::TypeId::of::<$t_src>()
+            if core::any::TypeId::of::<$t_dst>() == core::any::TypeId::of::<$t_src>()
                 && <$t_src as SimdElement>::has_simd()
             {
                 // Try the SIMD kernel. If it returns false, fall back to scalar.
@@ -224,7 +231,7 @@ macro_rules! unary_op {
                 #[cfg(feature = "parallel")]
                 {
                     use rayon::prelude::*;
-                    use std::sync::atomic::{AtomicBool, Ordering};
+                    use core::sync::atomic::{AtomicBool, Ordering};
 
                     let chunk_size = ($dst.data.len() / rayon::current_num_threads()).max(1024);
                     let all_ok = AtomicBool::new(true);
@@ -236,7 +243,7 @@ macro_rules! unary_op {
                             let offset = idx * chunk_size;
                             let len = dst_chunk.len();
                             let dst_as_src: &mut [$t_src] = unsafe {
-                                std::slice::from_raw_parts_mut(
+                                core::slice::from_raw_parts_mut(
                                     dst_chunk.as_mut_ptr() as *mut $t_src,
                                     len,
                                 )
@@ -255,7 +262,7 @@ macro_rules! unary_op {
                 #[cfg(not(feature = "parallel"))]
                 {
                     let dst_as_src: &mut [$t_src] = unsafe {
-                        std::slice::from_raw_parts_mut(
+                        core::slice::from_raw_parts_mut(
                             $dst.data.as_mut_ptr() as *mut $t_src,
                             $dst.data.len(),
                         )
@@ -1517,8 +1524,8 @@ where
     #[cfg(feature = "simd")]
     {
         // Only f32/f64 have simd_add_weighted; u8 and others use the scalar fallback.
-        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
-            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+        if (core::any::TypeId::of::<T>() == core::any::TypeId::of::<f32>()
+            || core::any::TypeId::of::<T>() == core::any::TypeId::of::<f64>())
             && <T as SimdElement>::has_simd()
         {
             <T>::simd_add_weighted(&mut dst.data, &src1.data, &src2.data, alpha, beta, gamma);
@@ -1647,8 +1654,8 @@ where
     #[cfg(feature = "simd")]
     {
         // Only f32/f64 have simd_convert_scale_abs; others use the scalar fallback.
-        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
-            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+        if (core::any::TypeId::of::<T>() == core::any::TypeId::of::<f32>()
+            || core::any::TypeId::of::<T>() == core::any::TypeId::of::<f64>())
             && <T as SimdElement>::has_simd()
         {
             <T>::simd_convert_scale_abs(&mut dst.data, &src.data, alpha, beta);
@@ -1817,7 +1824,7 @@ where
     T: Num + Copy + Send + Sync + Default + 'static,
 {
     mtx.data.fill(T::zero());
-    let n = std::cmp::min(mtx.rows, mtx.cols);
+    let n = core::cmp::min(mtx.rows, mtx.cols);
     let channels = mtx.channels;
     let cols = mtx.cols;
 
@@ -1891,8 +1898,8 @@ where
     #[cfg(feature = "simd")]
     {
         // Only f32/f64 have simd_dot; others use the scalar fallback.
-        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
-            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+        if (core::any::TypeId::of::<T>() == core::any::TypeId::of::<f32>()
+            || core::any::TypeId::of::<T>() == core::any::TypeId::of::<f64>())
             && <T as SimdElement>::has_simd()
         {
             if let Some(result) = <T>::simd_dot(&src1.data, &src2.data) {
@@ -1996,7 +2003,7 @@ pub fn trace<T>(src: &Matrix<T>) -> Scalar<f64>
 where
     T: Num + Copy + Send + Sync + ToPrimitive + Default + 'static,
 {
-    let n = std::cmp::min(src.rows, src.cols);
+    let n = core::cmp::min(src.rows, src.cols);
     let channels = src.channels;
     let cols = src.cols;
     let mut sum = [0.0; 4];
@@ -2334,8 +2341,8 @@ where
     #[cfg(feature = "simd")]
     {
         // Only f32/f64 have simd_magnitude; others use the scalar fallback.
-        if (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
-            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>())
+        if (core::any::TypeId::of::<T>() == core::any::TypeId::of::<f32>()
+            || core::any::TypeId::of::<T>() == core::any::TypeId::of::<f64>())
             && <T as SimdElement>::has_simd()
         {
             <T>::simd_magnitude(&mut dst.data, &x.data, &y.data);
@@ -2977,7 +2984,7 @@ where
             let start = r * dst.cols;
             let end = start + dst.cols;
             let row = &mut dst.data[start..end];
-            row.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            row.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
             if descending {
                 row.reverse();
             }
@@ -2986,7 +2993,7 @@ where
         // Sort every column: extract column, sort, put back
         for c in 0..dst.cols {
             let mut col: Vec<T> = (0..dst.rows).map(|r| dst.data[r * dst.cols + c]).collect();
-            col.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            col.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
             if descending {
                 col.reverse();
             }
@@ -3028,7 +3035,7 @@ where
             indices.sort_by(|&a, &b| {
                 src.data[start + a]
                     .partial_cmp(&src.data[start + b])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(core::cmp::Ordering::Equal)
             });
             if descending {
                 indices.reverse();
@@ -3043,7 +3050,7 @@ where
             indices.sort_by(|&a, &b| {
                 src.data[a * src.cols + c]
                     .partial_cmp(&src.data[b * src.cols + c])
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(core::cmp::Ordering::Equal)
             });
             if descending {
                 indices.reverse();
