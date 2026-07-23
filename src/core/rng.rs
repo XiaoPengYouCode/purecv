@@ -38,12 +38,18 @@
 // when `std` is disabled; with `std` the inherent methods win, so the
 // import is only "used" in no_std builds.
 use crate::core::constants::CV_2PI;
+// The RNG entry points (randu/randn/rand_shuffle) are std-only, so the error,
+// logging, and matrix imports they pull in are gated behind `std` too.
 #[cfg(feature = "std")]
-use crate::core::error::{PureCvError, Result};
+use crate::core::error::Result;
+#[cfg(feature = "std")]
+use crate::core::logging::tags;
 #[cfg(feature = "std")]
 use crate::core::types::Scalar;
 #[cfg(feature = "std")]
 use crate::core::Matrix;
+#[cfg(feature = "std")]
+use crate::cv_bail;
 #[cfg(feature = "std")]
 use core::cell::RefCell;
 #[allow(unused_imports)]
@@ -195,9 +201,11 @@ where
     T: Default + Clone + FromPrimitive + ToPrimitive + Send + Sync,
 {
     if dst.data.is_empty() {
-        return Err(PureCvError::InvalidDimensions(
-            "destination matrix is empty".into(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "randu: destination matrix is empty"
+        );
     }
 
     let channels = dst.channels;
@@ -248,9 +256,11 @@ where
     T: Default + Clone + FromPrimitive + ToPrimitive + Send + Sync,
 {
     if dst.data.is_empty() {
-        return Err(PureCvError::InvalidDimensions(
-            "destination matrix is empty".into(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "randn: destination matrix is empty"
+        );
     }
 
     let channels = dst.channels;

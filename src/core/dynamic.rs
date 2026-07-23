@@ -36,8 +36,10 @@
 
 use alloc::{format, vec, vec::Vec};
 
-use crate::core::error::{PureCvError, Result};
+use crate::core::error::Result;
+use crate::core::logging::tags;
 use crate::core::matrix::{Depth, MatType, Matrix};
+use crate::cv_bail;
 
 /// An enum bridging type-erased dynamic usage to strongly typed generic `Matrix<T>`.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,9 +105,7 @@ impl DynamicMatrix {
             Depth::CV_32F => DynamicData::F32(Matrix::from_vec(rows, cols, ch, vec![0f32; n])),
             Depth::CV_64F => DynamicData::F64(Matrix::from_vec(rows, cols, ch, vec![0f64; n])),
             Depth::CV_16F => {
-                return Err(PureCvError::InvalidInput(
-                    "CV_16F is not yet supported".into(),
-                ))
+                cv_bail!(tags::CORE, InvalidInput, "new: CV_16F is not yet supported")
             }
         };
         Ok(Self { data })
@@ -134,9 +134,11 @@ impl DynamicMatrix {
             Depth::CV_32F => DynamicData::F32(Matrix::from_vec(rows, cols, ch, vec![1f32; n])),
             Depth::CV_64F => DynamicData::F64(Matrix::from_vec(rows, cols, ch, vec![1f64; n])),
             Depth::CV_16F => {
-                return Err(PureCvError::InvalidInput(
-                    "CV_16F is not yet supported".into(),
-                ))
+                cv_bail!(
+                    tags::CORE,
+                    InvalidInput,
+                    "ones: CV_16F is not yet supported"
+                )
             }
         };
         Ok(Self { data })
@@ -154,14 +156,16 @@ impl DynamicMatrix {
     pub fn new_u8(rows: usize, cols: usize, channels: usize, data: Vec<u8>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_u8: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::U8(Matrix::from_vec(rows, cols, channels, data)),
@@ -175,14 +179,16 @@ impl DynamicMatrix {
     pub fn new_i8(rows: usize, cols: usize, channels: usize, data: Vec<i8>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_i8: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::I8(Matrix::from_vec(rows, cols, channels, data)),
@@ -196,14 +202,16 @@ impl DynamicMatrix {
     pub fn new_u16(rows: usize, cols: usize, channels: usize, data: Vec<u16>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_u16: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::U16(Matrix::from_vec(rows, cols, channels, data)),
@@ -217,14 +225,16 @@ impl DynamicMatrix {
     pub fn new_i16(rows: usize, cols: usize, channels: usize, data: Vec<i16>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_i16: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::I16(Matrix::from_vec(rows, cols, channels, data)),
@@ -238,14 +248,16 @@ impl DynamicMatrix {
     pub fn new_i32(rows: usize, cols: usize, channels: usize, data: Vec<i32>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_i32: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::I32(Matrix::from_vec(rows, cols, channels, data)),
@@ -259,14 +271,16 @@ impl DynamicMatrix {
     pub fn new_f32(rows: usize, cols: usize, channels: usize, data: Vec<f32>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_f32: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::F32(Matrix::from_vec(rows, cols, channels, data)),
@@ -280,14 +294,16 @@ impl DynamicMatrix {
     pub fn new_f64(rows: usize, cols: usize, channels: usize, data: Vec<f64>) -> Result<Self> {
         let expected = rows * cols * channels;
         if data.len() != expected {
-            return Err(PureCvError::InvalidInput(format!(
-                "Data length {} does not match {}×{}×{} = {}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_f64: data length {} does not match {}×{}×{} = {}",
                 data.len(),
                 rows,
                 cols,
                 channels,
                 expected
-            )));
+            );
         }
         Ok(Self {
             data: DynamicData::F64(Matrix::from_vec(rows, cols, channels, data)),

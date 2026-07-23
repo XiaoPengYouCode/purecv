@@ -34,11 +34,13 @@
  *
  */
 
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
-use crate::core::error::{PureCvError, Result};
+use crate::core::error::Result;
+use crate::core::logging::tags;
 use crate::core::types::Scalar;
 use crate::core::Matrix;
+use crate::{cv_bail, cv_err};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -221,9 +223,11 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if src.is_empty() || dst.is_empty() || from_to.is_empty() {
-        return Err(PureCvError::InvalidInput(
-            "Input/Output/from_to cannot be empty".to_string(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidInput,
+            "mix_channels: input/output/from_to cannot be empty"
+        );
     }
 
     let rows = src[0].rows;
@@ -232,16 +236,20 @@ where
     // Validate dimensions
     for m in src {
         if m.rows != rows || m.cols != cols {
-            return Err(PureCvError::InvalidDimensions(
-                "All source matrices must have the same size".to_string(),
-            ));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "mix_channels: all source matrices must have the same size"
+            );
         }
     }
     for m in dst.iter() {
         if m.rows != rows || m.cols != cols {
-            return Err(PureCvError::InvalidDimensions(
-                "All destination matrices must have the same size".to_string(),
-            ));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "mix_channels: all destination matrices must have the same size"
+            );
         }
     }
 
@@ -433,9 +441,11 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if mv.is_empty() {
-        return Err(PureCvError::InvalidDimensions(
-            "Input vector is empty".to_string(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "merge: input vector is empty"
+        );
     }
 
     let rows = mv[0].rows;
@@ -444,9 +454,11 @@ where
 
     for m in mv {
         if m.rows != rows || m.cols != cols || m.channels != 1 {
-            return Err(PureCvError::InvalidDimensions(
-                "All matrices must have the same size and 1 channel".to_string(),
-            ));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "merge: all matrices must have the same size and 1 channel"
+            );
         }
     }
 
@@ -501,8 +513,11 @@ where
             let t = transpose(src)?;
             flip(&t, 0)
         }
-        _ => Err(PureCvError::InvalidDimensions(
-            "Invalid rotate_code. Must be 0, 1, or 2".to_string(),
+        _ => Err(cv_err!(
+            tags::CORE,
+            InvalidDimensions,
+            "rotate: invalid rotate_code {}, must be 0, 1, or 2",
+            rotate_code
         )),
     }
 }
@@ -513,9 +528,13 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if ny == 0 || nx == 0 {
-        return Err(PureCvError::InvalidDimensions(
-            "ny and nx must be > 0".to_string(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "repeat: ny and nx must be > 0 (got ny = {}, nx = {})",
+            ny,
+            nx
+        );
     }
 
     let mut dst = Matrix::<T>::new(src.rows * ny, src.cols * nx, src.channels);
@@ -572,20 +591,26 @@ where
     };
 
     if !total_elements.is_multiple_of(actual_new_channels) {
-        return Err(PureCvError::InvalidDimensions(format!(
-            "Total elements ({}) is not divisible by new_channels ({})",
-            total_elements, actual_new_channels
-        )));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "reshape: total elements ({}) is not divisible by new_channels ({})",
+            total_elements,
+            actual_new_channels
+        );
     }
 
     let total_pixels = total_elements / actual_new_channels;
     let actual_new_rows = if new_rows == 0 { src.rows } else { new_rows };
 
     if !total_pixels.is_multiple_of(actual_new_rows) {
-        return Err(PureCvError::InvalidDimensions(format!(
-            "Total pixels ({}) is not divisible by new_rows ({})",
-            total_pixels, actual_new_rows
-        )));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "reshape: total pixels ({}) is not divisible by new_rows ({})",
+            total_pixels,
+            actual_new_rows
+        );
     }
 
     let new_cols = total_pixels / actual_new_rows;
@@ -602,9 +627,7 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if src.is_empty() {
-        return Err(PureCvError::InvalidInput(
-            "Input array is empty".to_string(),
-        ));
+        cv_bail!(tags::CORE, InvalidInput, "hconcat: input array is empty");
     }
 
     let rows = src[0].rows;
@@ -613,9 +636,11 @@ where
 
     for m in src {
         if m.rows != rows || m.channels != channels {
-            return Err(PureCvError::InvalidDimensions(
-                "All matrices must have the same number of rows and channels".to_string(),
-            ));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "hconcat: all matrices must have the same number of rows and channels"
+            );
         }
         total_cols += m.cols;
     }
@@ -663,9 +688,7 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if src.is_empty() {
-        return Err(PureCvError::InvalidInput(
-            "Input array is empty".to_string(),
-        ));
+        cv_bail!(tags::CORE, InvalidInput, "vconcat: input array is empty");
     }
 
     let cols = src[0].cols;
@@ -674,9 +697,11 @@ where
 
     for m in src {
         if m.cols != cols || m.channels != channels {
-            return Err(PureCvError::InvalidDimensions(
-                "All matrices must have the same number of columns and channels".to_string(),
-            ));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "vconcat: all matrices must have the same number of columns and channels"
+            );
         }
         total_rows += m.rows;
     }
@@ -698,10 +723,13 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if coi >= src.channels {
-        return Err(PureCvError::InvalidInput(format!(
-            "Channel index {} is out of range (total channels: {})",
-            coi, src.channels
-        )));
+        cv_bail!(
+            tags::CORE,
+            InvalidInput,
+            "extract_channel: channel index {} is out of range (total channels: {})",
+            coi,
+            src.channels
+        );
     }
 
     let mut dst = Matrix::<T>::new(src.rows, src.cols, 1);
@@ -730,16 +758,21 @@ where
     T: Copy + Send + Sync + Default + 'static,
 {
     if coi >= dst.channels {
-        return Err(PureCvError::InvalidInput(format!(
-            "Channel index {} is out of range (destination channels: {})",
-            coi, dst.channels
-        )));
+        cv_bail!(
+            tags::CORE,
+            InvalidInput,
+            "insert_channel: channel index {} is out of range (destination channels: {})",
+            coi,
+            dst.channels
+        );
     }
 
     if src.rows != dst.rows || src.cols != dst.cols || src.channels != 1 {
-        return Err(PureCvError::InvalidDimensions(
-            "Source must be single-channel and match destination size".to_string(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "insert_channel: source must be single-channel and match destination size"
+        );
     }
 
     let channels = dst.channels;

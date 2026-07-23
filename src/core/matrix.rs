@@ -33,10 +33,11 @@
  *  Author(s): Walter Perdan @kalwalt https://github.com/kalwalt
  *
  */
-
-use crate::core::error::{PureCvError, Result};
+use crate::core::error::Result;
+use crate::core::logging::tags;
 use crate::core::types::Scalar;
-use alloc::{format, vec, vec::Vec};
+use crate::{cv_bail, cv_err};
+use alloc::{vec, vec::Vec};
 
 /// Matrix depth: number of bits per element and its signedness/type.
 /// Follows OpenCV's depth conventions (CV_8U, CV_32F, etc.).
@@ -340,11 +341,13 @@ impl<T: Default + Clone> Matrix<T> {
         T: Default + Clone + DataType,
     {
         if mat_type.depth() != T::depth() {
-            return Err(PureCvError::InvalidInput(format!(
-                "MatType depth {:?} does not match element type {:?}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_with_type: MatType depth {:?} does not match element type {:?}",
                 mat_type.depth(),
                 T::depth()
-            )));
+            );
         }
         Ok(Self::new(rows, cols, mat_type.channels()))
     }
@@ -386,11 +389,13 @@ impl<T: Default + Clone> Matrix<T> {
         T: Default + Clone + DataType,
     {
         if mat_type.depth() != T::depth() {
-            return Err(PureCvError::InvalidInput(format!(
-                "MatType depth {:?} does not match element type {:?}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "create_with_type: MatType depth {:?} does not match element type {:?}",
                 mat_type.depth(),
                 T::depth()
-            )));
+            );
         }
         self.create(rows, cols, mat_type.channels());
         Ok(())
@@ -481,7 +486,7 @@ impl<T: Default + Clone> Matrix<T> {
     /// Channels beyond 4 are set to `T::default()` (zero).
     ///
     /// # Errors
-    /// Returns [`PureCvError::InvalidDimensions`] if `mask` does not have the
+    /// Returns [`crate::core::error::PureCvError::InvalidDimensions`] if `mask` does not have the
     /// same number of rows and columns as `self`.
     ///
     /// # Example
@@ -496,10 +501,15 @@ impl<T: Default + Clone> Matrix<T> {
     /// ```
     pub fn set_to_masked(&mut self, s: Scalar<T>, mask: &Matrix<u8>) -> Result<()> {
         if self.rows != mask.rows || self.cols != mask.cols {
-            return Err(PureCvError::InvalidDimensions(format!(
-                "mask {}×{} does not match matrix {}×{}",
-                mask.rows, mask.cols, self.rows, self.cols
-            )));
+            cv_bail!(
+                tags::CORE,
+                InvalidDimensions,
+                "set_to_masked: mask {}×{} does not match matrix {}×{}",
+                mask.rows,
+                mask.cols,
+                self.rows,
+                self.cols
+            );
         }
         for row in 0..self.rows {
             for col in 0..self.cols {
@@ -526,7 +536,13 @@ impl<T: Default + Clone> Matrix<T> {
             .data
             .iter()
             .map(|&x| {
-                U::from(x).ok_or_else(|| PureCvError::InvalidInput("Conversion failed".into()))
+                U::from(x).ok_or_else(|| {
+                    cv_err!(
+                        tags::CORE,
+                        InvalidInput,
+                        "convert_to: element conversion failed"
+                    )
+                })
             })
             .collect::<Result<Vec<U>>>()?;
 
@@ -651,11 +667,13 @@ impl<T: num_traits::Zero + num_traits::One + Default + Clone> Matrix<T> {
         T: DataType,
     {
         if mat_type.depth() != T::depth() {
-            return Err(PureCvError::InvalidInput(format!(
-                "MatType depth {:?} does not match element type {:?}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "zeros_with_type: MatType depth {:?} does not match element type {:?}",
                 mat_type.depth(),
                 T::depth()
-            )));
+            );
         }
         Ok(Self::zeros(rows, cols, mat_type.channels()))
     }
@@ -666,11 +684,13 @@ impl<T: num_traits::Zero + num_traits::One + Default + Clone> Matrix<T> {
         T: DataType,
     {
         if mat_type.depth() != T::depth() {
-            return Err(PureCvError::InvalidInput(format!(
-                "MatType depth {:?} does not match element type {:?}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "ones_with_type: MatType depth {:?} does not match element type {:?}",
                 mat_type.depth(),
                 T::depth()
-            )));
+            );
         }
         Ok(Self::ones(rows, cols, mat_type.channels()))
     }
@@ -712,7 +732,7 @@ impl<T: Default + Clone + DataType> Matrix<T> {
     /// mismatches are caught at runtime rather than producing silent garbage.
     ///
     /// # Errors
-    /// Returns [`PureCvError::InvalidInput`] when `mat_type.depth() != T::depth()`.
+    /// Returns [`crate::core::error::PureCvError::InvalidInput`] when `mat_type.depth() != T::depth()`.
     ///
     /// # Example
     /// ```
@@ -732,11 +752,13 @@ impl<T: Default + Clone + DataType> Matrix<T> {
         s: Scalar<T>,
     ) -> Result<Self> {
         if mat_type.depth() != T::depth() {
-            return Err(PureCvError::InvalidInput(format!(
-                "MatType depth {:?} does not match element type depth {:?}",
+            cv_bail!(
+                tags::CORE,
+                InvalidInput,
+                "new_with_scalar_typed_from_size: MatType depth {:?} does not match element type depth {:?}",
                 mat_type.depth(),
                 T::depth()
-            )));
+            );
         }
         let rows = size.height.into();
         let cols = size.width.into();
