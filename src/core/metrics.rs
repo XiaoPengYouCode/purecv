@@ -34,8 +34,17 @@
  *
  */
 
-use crate::core::error::{PureCvError, Result};
+// `num_traits::Float` provides `sqrt`, `sin`, ... on `f32`/`f64` via libm
+// when `std` is disabled; with `std` the inherent methods win, so the
+// import is only "used" in no_std builds.
+use alloc::vec;
+#[allow(unused_imports)]
+use num_traits::Float;
+
+use crate::core::error::Result;
+use crate::core::logging::tags;
 use crate::core::matrix::Matrix;
+use crate::cv_bail;
 
 /// Computes the Peak Signal-to-Noise Ratio (PSNR) between two matrices.
 ///
@@ -64,9 +73,17 @@ where
     T: Copy + Into<f64>,
 {
     if img1.rows != img2.rows || img1.cols != img2.cols || img1.channels != img2.channels {
-        return Err(PureCvError::InvalidDimensions(
-            "Images must have same dimensions for PSNR".into(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "psnr: images must have the same dimensions (img1 {}×{}×{}, img2 {}×{}×{})",
+            img1.rows,
+            img1.cols,
+            img1.channels,
+            img2.rows,
+            img2.cols,
+            img2.channels
+        );
     }
 
     let mut mse = 0.0;
@@ -113,16 +130,29 @@ where
 {
     // Ensure vectors are column vectors of the same size.
     if src1.rows != src2.rows || src1.cols != 1 || src2.cols != 1 {
-        return Err(PureCvError::InvalidDimensions(
-            "src1 and src2 must be column vectors of the same size".into(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "mahalanobis: src1 and src2 must be column vectors of the same size \
+             (src1 {}×{}, src2 {}×{})",
+            src1.rows,
+            src1.cols,
+            src2.rows,
+            src2.cols
+        );
     }
 
     // Ensure covariance matrix is square and matches vector size
     if covar_inv.rows != covar_inv.cols || covar_inv.rows != src1.rows {
-        return Err(PureCvError::InvalidDimensions(
-            "covar_inv must be a square matrix matching vector size".into(),
-        ));
+        cv_bail!(
+            tags::CORE,
+            InvalidDimensions,
+            "mahalanobis: covar_inv must be a square matrix matching vector size \
+             (covar_inv {}×{}, vector size {})",
+            covar_inv.rows,
+            covar_inv.cols,
+            src1.rows
+        );
     }
 
     let n = src1.rows;

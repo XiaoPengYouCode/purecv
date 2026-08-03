@@ -1,5 +1,5 @@
 /*
- *  error.rs
+ *  lib.rs
  *  purecv
  *
  *  This file is part of purecv - WebARKit.
@@ -34,35 +34,32 @@
  *
  */
 
-use alloc::string::String;
+//! Build-only `no_std` smoke test for `purecv` (issue #83).
+//!
+//! This crate never runs; compiling it for a bare-metal target such as
+//! `thumbv7em-none-eabihf` proves that the `purecv` core API is usable
+//! from a `no_std` + `alloc` consumer:
+//!
+//! ```sh
+//! cargo build --target thumbv7em-none-eabihf
+//! ```
 
-use core::fmt;
+#![no_std]
 
-/// Custom error type for the purecv library.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PureCvError {
-    InvalidDimensions(String),
-    IncompatibleChannels(String),
-    OutOfBounds(String),
-    InvalidInput(String),
-    InternalError(String),
-    NotImplemented(String),
+extern crate alloc;
+
+use alloc::vec;
+use purecv::core::error::Result;
+use purecv::core::{add, determinant, mean, Matrix};
+
+/// Exercises matrix construction, arithmetic, statistics, and linear algebra.
+pub fn smoke() -> Result<f64> {
+    let a = Matrix::<f32>::from_vec(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]);
+    let b = Matrix::<f32>::from_vec(2, 2, 1, vec![5.0, 6.0, 7.0, 8.0]);
+
+    let sum = add(&a, &b)?;
+    let avg = mean(&sum);
+    let det = determinant(&sum);
+
+    Ok(avg.v[0] + det)
 }
-
-impl fmt::Display for PureCvError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PureCvError::InvalidDimensions(msg) => write!(f, "Invalid dimensions: {}", msg),
-            PureCvError::IncompatibleChannels(msg) => write!(f, "Incompatible channels: {}", msg),
-            PureCvError::OutOfBounds(msg) => write!(f, "Out of bounds: {}", msg),
-            PureCvError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            PureCvError::InternalError(msg) => write!(f, "Internal error: {}", msg),
-            PureCvError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
-        }
-    }
-}
-
-impl core::error::Error for PureCvError {}
-
-/// Standard result type for purecv.
-pub type Result<T> = core::result::Result<T, PureCvError>;
