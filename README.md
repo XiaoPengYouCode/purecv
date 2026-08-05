@@ -9,9 +9,9 @@
 [![GitHub Stars](https://img.shields.io/github/stars/webarkit/purecv.svg?style=social)](https://github.com/webarkit/purecv/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/webarkit/purecv.svg?style=social)](https://github.com/webarkit/purecv/network/members)
 
-A high-performance, **pure Rust** computer vision library focusing on the `core` and `imgproc` modules of OpenCV. **PureCV** is built from the ground up to be memory-safe, thread-safe, and highly portable without the overhead of C++ FFI.
+A high-performance, **pure Rust** computer vision library reimplementing the `core`, `imgproc`, `features2d`, `video`, and `calib3d` modules of OpenCV. **PureCV** is built from the ground up to be memory-safe, thread-safe, and highly portable — from desktop and WebAssembly down to `no_std` microcontrollers — without the overhead of C++ FFI.
 
-> This project is currently a **Work in Progress**. While most core and imgproc features have been implemented, the library is not yet stable, and bugs may occur. We are actively optimizing and expanding the feature set.
+> This project is currently a **Work in Progress**. While most features across the core, imgproc, features2d, video, and calib3d modules have been implemented, the library is not yet stable, and bugs may occur. We are actively optimizing and expanding the feature set.
 
 ## 🎯 Philosophy
 
@@ -21,6 +21,7 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 * **Memory Safety:** Elimination of segmentation faults and buffer overflows via Rust's ownership model.
 * **Modern Parallelism:** Native integration with **Rayon** for effortless multi-core processing.
 * **Portable SIMD:** Optional SIMD acceleration via [`pulp`](https://crates.io/crates/pulp) — auto-detects x86 SSE/AVX, ARM NEON, and WASM `simd128` at runtime. Zero `unsafe`, zero `#[cfg(target_arch)]`.
+* **Embedded-ready:** Builds under `no_std` + `alloc` for bare-metal targets such as the ESP32 — the `core`, `imgproc`, `calib3d`, and `video` modules run without the standard library ([see below](#no_std--embedded-support)).
 
 ## ✨ Features
 
@@ -43,7 +44,7 @@ Unlike existing wrappers, **PureCV** is a native rewrite. It aims to provide:
 - **Channel Management:** `split`, `merge`, `mix_channels`.
 - **Utilities:** `add_weighted`, `check_range`, `absdiff`, `get_tick_count`, `get_tick_frequency`.
 - **Logging** (OpenCV-style): a `cv::utils::logging`-compatible facade over the [`log`](https://crates.io/crates/log) crate — a 7-level `LogLevel` with `set_log_level`/`get_log_level`, per-subsystem `tags`, `cv_log_*!` macros, and `cv_bail!`/`cv_err!` log-and-return helpers used throughout `core` to report invalid input (wrong dimensions, channel mismatches, …). Bring your own backend (`env_logger`, `tracing`, …) or call `init_basic_logger()` for quick stdout output.
-- **Mathematical Constants:** OpenCV-compatible constants — `CV_PI`, `CV_PI_2`, `CV_2PI`, `CV_PI_4`, `CV_LOG2`, `CV_LN2`, `CV_E`, `CV_LN10`, `CV_SQRT2` — backed by `std::f64::consts` for maximum precision.
+- **Mathematical Constants:** OpenCV-compatible constants — `CV_PI`, `CV_PI_2`, `CV_2PI`, `CV_PI_4`, `CV_LOG2`, `CV_LN2`, `CV_E`, `CV_LN10`, `CV_SQRT2` — backed by `core::f64::consts` for maximum precision (available under `no_std`).
 - **ndarray Interop:** Optional, zero-cost conversions to/from `ndarray::Array3` via the `ndarray` feature flag.
 - **SIMD Acceleration** (`simd` feature): Trait-based dispatch via `pulp` for `f32`, `f64`, and `u8` types. Accelerated operations include `add`, `sub`, `mul`, `div`, `min`, `max`, `sqrt`, `dot`, `sum`, `add_weighted`, `convert_scale_abs`, `magnitude`, `simd_row_min_max`, `simd_min_max_col`, `simd_gaussian_5tap_h/v`, and `simd_remap_bilinear_row`/`simd_remap_nearest_row`. Falls back to scalar loops at zero cost when disabled.
 
@@ -84,8 +85,10 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-purecv = "0.5"
+purecv = "0.6"
 ```
+
+PureCV's minimum supported Rust version (MSRV) is **1.88**.
 
 ### Feature Flags
 
@@ -112,22 +115,47 @@ and `alloc` are required (an allocator must be provided by the target).
 | `features2d` | ❌ | Requires `std` for now. |
 
 `parallel`, `simd`, `fft`, and `ndarray` require `std`; disabling default
-features gives the scalar, single-threaded code paths. See
-[`webarkit/purecv-esp32-examples`](https://github.com/webarkit/purecv-esp32-examples)
-for runnable ESP32-S3 demos.
+features gives the scalar, single-threaded code paths.
+
+```toml
+[dependencies]
+purecv = { version = "0.6", default-features = false }
+```
+
+```rust
+#![no_std]
+extern crate alloc; // an allocator must be provided by your target
+
+use alloc::vec;
+use purecv::core::{add, Matrix};
+use purecv::imgproc::gaussian_blur;
+use purecv::core::types::{BorderTypes, Size2i};
+
+// core arithmetic, no std
+let a = Matrix::<f32>::from_vec(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]);
+let b = Matrix::<f32>::from_vec(2, 2, 1, vec![5.0, 6.0, 7.0, 8.0]);
+let sum = add(&a, &b)?;
+
+// imgproc under no_std (scalar fallback)
+let blurred = gaussian_blur(&sum, Size2i::new(3, 3), 0.0, 0.0, BorderTypes::Reflect101)?;
+```
+
+See [`webarkit/purecv-esp32-examples`](https://github.com/webarkit/purecv-esp32-examples)
+for runnable ESP32-S3 demos (matrix arithmetic, Gaussian blur, and `solve_pnp`
+camera pose estimation).
 
 To enable the `ndarray` feature:
 
 ```toml
 [dependencies]
-purecv = { version = "0.5", features = ["ndarray"] }
+purecv = { version = "0.6", features = ["ndarray"] }
 ```
 
 To enable SIMD + Parallel for maximum performance:
 
 ```toml
 [dependencies]
-purecv = { version = "0.5", features = ["parallel", "simd"] }
+purecv = { version = "0.6", features = ["parallel", "simd"] }
 ```
 
 ### Usage Example
@@ -315,7 +343,7 @@ cargo run --example rectification
 ## 🧪 Testing & Benchmarking
 
 ### Running Tests
-PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **281 unit tests** (plus **31 doc-tests**) covering:
+PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **308 unit tests** (plus **40 doc-tests**) covering:
 
 - **Core module:** Matrix factories, scalar arithmetic variants, bitwise scalar ops, min/max, comparison ops (`compare`, `in_range`), reduction (`reduce`, `count_non_zero`), polar/cartesian conversions, linear algebra (`determinant`, `invert`, `solve`), channel ops (`extract_channel`, `insert_channel`), `DynamicMatrix`, transforms, sorting, clustering, and RNG.
 - **Imgproc module:** Filters, derivatives, edge detection, color conversions (including gray-to-RGB/BGR/RGBA/BGRA), thresholding, morphology (`erode`, `dilate`), pyramids (`pyr_down`, `pyr_up`), and kernel helpers (`get_gaussian_kernel`, `get_sobel_kernels`).
@@ -369,6 +397,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --features parallel
 ## 🗺 Roadmap
 
 - [x] [**Milestone 7: Geometric Rectification & Calibration**](https://github.com/webarkit/purecv/milestone/7) - Expand purecv to support camera intrinsic correction and geometric transformation, essential for robust 3D pose estimation and AR surface tracking.
+- [x] **Embedded / `no_std` support** - The `core`, `imgproc`, `calib3d`, and `video` modules compile without the standard library for microcontrollers such as the ESP32. See [`purecv-esp32-examples`](https://github.com/webarkit/purecv-esp32-examples).
 
 ## 📄 License
 
