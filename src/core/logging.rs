@@ -477,7 +477,7 @@ macro_rules! cv_log_if_debug {
 #[macro_export]
 macro_rules! cv_bail {
     ($tag:expr, $variant:ident, $($arg:tt)+) => {{
-        let __msg = format!($($arg)+);
+        let __msg = $crate::__format!($($arg)+);
         $crate::cv_log_warning!($tag, "{}", __msg);
         return Err($crate::core::error::PureCvError::$variant(__msg));
     }};
@@ -489,7 +489,7 @@ macro_rules! cv_bail {
 #[macro_export]
 macro_rules! cv_err {
     ($tag:expr, $variant:ident, $($arg:tt)+) => {{
-        let __msg = format!($($arg)+);
+        let __msg = $crate::__format!($($arg)+);
         $crate::cv_log_warning!($tag, "{}", __msg);
         $crate::core::error::PureCvError::$variant(__msg)
     }};
@@ -499,7 +499,7 @@ macro_rules! cv_err {
 #[macro_export]
 macro_rules! cv_bail_debug {
     ($tag:expr, $variant:ident, $($arg:tt)+) => {{
-        let __msg = format!($($arg)+);
+        let __msg = $crate::__format!($($arg)+);
         $crate::cv_log_debug!($tag, "{}", __msg);
         return Err($crate::core::error::PureCvError::$variant(__msg));
     }};
@@ -509,7 +509,7 @@ macro_rules! cv_bail_debug {
 #[macro_export]
 macro_rules! cv_err_debug {
     ($tag:expr, $variant:ident, $($arg:tt)+) => {{
-        let __msg = format!($($arg)+);
+        let __msg = $crate::__format!($($arg)+);
         $crate::cv_log_debug!($tag, "{}", __msg);
         $crate::core::error::PureCvError::$variant(__msg)
     }};

@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::vec;
+
 use crate::core::constants::CV_PI;
 use crate::core::error::Result;
 use crate::core::logging::tags;

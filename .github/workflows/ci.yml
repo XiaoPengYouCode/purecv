@@ -46,6 +46,34 @@ jobs:
     - name: Run tests (with ndarray feature)
       run: cargo test --workspace --features ndarray
 
+  no-std-build:
+    name: no_std Build (core + imgproc + calib3d + video, issues #83/#84/#85)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+        targets: thumbv7em-none-eabihf
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Build without default features (host)
+      run: cargo build --no-default-features
+
+    - name: Lint without default features
+      run: cargo clippy --no-default-features -- -D warnings
+
+    - name: Build for bare-metal target
+      run: cargo build --no-default-features --target thumbv7em-none-eabihf
+
+    - name: Build no_std smoke-test consumer
+      run: cargo build --manifest-path crates/no-std-smoke/Cargo.toml --target thumbv7em-none-eabihf
+
   wasm-build:
     name: WASM Dual Build
     runs-on: ubuntu-latest

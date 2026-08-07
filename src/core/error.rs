@@ -34,7 +34,9 @@
  *
  */
 
-use std::fmt;
+use alloc::string::String;
+
+use core::fmt;
 
 /// Custom error type for the purecv library.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +62,7 @@ impl fmt::Display for PureCvError {
     }
 }
 
-impl std::error::Error for PureCvError {}
+impl core::error::Error for PureCvError {}
 
 /// Standard result type for purecv.
-pub type Result<T> = std::result::Result<T, PureCvError>;
+pub type Result<T> = core::result::Result<T, PureCvError>;

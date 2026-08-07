@@ -34,6 +34,8 @@
  *
  */
 
+use alloc::vec::Vec;
+
 use crate::core::error::Result;
 use crate::core::logging::tags;
 use crate::core::types::Scalar;

@@ -34,6 +34,13 @@
  *
  */
 
+// `num_traits::Float` provides `sqrt`, `sin`, ... on `f32`/`f64` via libm
+// when `std` is disabled; with `std` the inherent methods win, so the
+// import is only "used" in no_std builds.
+use alloc::vec;
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::core::error::Result;
 use crate::core::logging::tags;
 use crate::core::matrix::Matrix;

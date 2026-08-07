@@ -34,14 +34,28 @@
  *
  */
 
+// `num_traits::Float` provides `sqrt`, `sin`, ... on `f32`/`f64` via libm
+// when `std` is disabled; with `std` the inherent methods win, so the
+// import is only "used" in no_std builds.
 use crate::core::constants::CV_2PI;
+// The RNG entry points (randu/randn/rand_shuffle) are std-only, so the error,
+// logging, and matrix imports they pull in are gated behind `std` too.
+#[cfg(feature = "std")]
 use crate::core::error::Result;
+#[cfg(feature = "std")]
 use crate::core::logging::tags;
+#[cfg(feature = "std")]
 use crate::core::types::Scalar;
+#[cfg(feature = "std")]
 use crate::core::Matrix;
+#[cfg(feature = "std")]
 use crate::cv_bail;
+#[cfg(feature = "std")]
+use core::cell::RefCell;
+#[allow(unused_imports)]
+use num_traits::Float;
+#[cfg(feature = "std")]
 use num_traits::{FromPrimitive, ToPrimitive};
-use std::cell::RefCell;
 
 // ---------------------------------------------------------------------------
 // Xoshiro256** — a fast, high-quality pure-Rust PRNG (public domain algorithm
@@ -49,11 +63,16 @@ use std::cell::RefCell;
 // ---------------------------------------------------------------------------
 
 /// Internal state for the xoshiro256** generator.
+// Without `std` the thread-local RNG below is compiled out, leaving this
+// generator temporarily unused; a seedable no_std API is planned in #82.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[derive(Clone)]
 struct Xoshiro256 {
     s: [u64; 4],
 }
 
+// See the note on `Xoshiro256`: without `std` these methods have no caller yet.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 impl Xoshiro256 {
     /// Creates a new generator seeded by expanding `seed` through SplitMix64.
     fn from_seed(seed: u64) -> Self {
@@ -124,7 +143,8 @@ impl Xoshiro256 {
 // Thread-local RNG state
 // ---------------------------------------------------------------------------
 
-thread_local! {
+#[cfg(feature = "std")]
+std::thread_local! {
     static THREAD_RNG: RefCell<Xoshiro256> = RefCell::new(Xoshiro256::from_seed(0));
 }
 
@@ -142,6 +162,7 @@ thread_local! {
 /// use purecv::core::set_rng_seed;
 /// set_rng_seed(42);
 /// ```
+#[cfg(feature = "std")]
 pub fn set_rng_seed(seed: u64) {
     THREAD_RNG.with(|rng| {
         *rng.borrow_mut() = Xoshiro256::from_seed(seed);
@@ -174,6 +195,7 @@ pub fn set_rng_seed(seed: u64) {
 /// let mut mat = Matrix::<f32>::new(100, 100, 1);
 /// randu(&mut mat, Scalar::all(0.0), Scalar::all(1.0)).unwrap();
 /// ```
+#[cfg(feature = "std")]
 pub fn randu<T>(dst: &mut Matrix<T>, low: Scalar<f64>, high: Scalar<f64>) -> Result<()>
 where
     T: Default + Clone + FromPrimitive + ToPrimitive + Send + Sync,
@@ -228,6 +250,7 @@ where
 /// let mut mat = Matrix::<f64>::new(100, 100, 1);
 /// randn(&mut mat, Scalar::all(0.0), Scalar::all(1.0)).unwrap();
 /// ```
+#[cfg(feature = "std")]
 pub fn randn<T>(dst: &mut Matrix<T>, mean: Scalar<f64>, std_dev: Scalar<f64>) -> Result<()>
 where
     T: Default + Clone + FromPrimitive + ToPrimitive + Send + Sync,
@@ -273,6 +296,7 @@ where
 ///
 /// # Arguments
 /// * `slice` - The slice to shuffle.
+#[cfg(feature = "std")]
 pub fn rand_shuffle<T>(slice: &mut [T]) {
     if slice.is_empty() {
         return;
