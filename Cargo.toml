@@ -1,8 +1,9 @@
 [package]
 name = "purecv"
-version = "0.6.1"
+version = "0.7.0"
 authors = ["Walter Perdan <https://github.com/kalwalt>"]
 edition = "2021"
+rust-version = "1.88"
 description = "A pure Rust, high-performance computer vision library focused on safety and portability."
 license = "LGPL-2.1-or-later"
 repository = "https://github.com/webarkit/purecv"
@@ -16,11 +17,11 @@ path = "src/lib.rs"
 [dependencies]
 rayon = { version = "1.10", optional = true }
 ndarray = { version = "0.17", optional = true }
-num-traits = "0.2"
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 pulp = { version = "0.22", optional = true }
 rustfft = { version = "6", optional = true }
 num-complex = { version = "0.4", optional = true }
-log = "0.4"
+log = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 image = "0.25"
@@ -28,11 +29,12 @@ criterion = "0.8"
 
 [features]
 default = ["std", "parallel"]
-std = []
-parallel = ["rayon"]
-ndarray = ["dep:ndarray"]
-simd = ["dep:pulp"]
-fft = ["dep:rustfft", "dep:num-complex"]
+std = ["num-traits/std"]
+# The features below require `std` until their own no_std phases land (see issue #82).
+parallel = ["dep:rayon", "std"]
+ndarray = ["dep:ndarray", "std"]
+simd = ["dep:pulp", "std"]
+fft = ["dep:rustfft", "dep:num-complex", "std"]
 transforms = ["fft"]
 
 [[bench]]
@@ -79,9 +81,12 @@ panic = "abort"
 
 [workspace]
 members = ["crates/wasm"]
+# Built separately against bare-metal targets (see the no-std CI job); keeping it
+# out of the workspace lets `cargo build --workspace` stay host-only.
+exclude = ["crates/no-std-smoke"]
 
 [workspace.package]
-version = "0.6.1"
+version = "0.7.0"
 authors = ["Walter Perdan <https://github.com/kalwalt>"]
 edition = "2021"
 description = "A pure Rust, high-performance computer vision library focused on safety and portability."

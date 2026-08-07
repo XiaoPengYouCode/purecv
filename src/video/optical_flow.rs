@@ -52,9 +52,18 @@
 //! | `calcOpticalFlowPyrLK` `nextPts` is `InputOutputArray` | initial guess passed via `initial_next_pts: Option<&[Point2f]>` |
 //! | `tryReuseInputImage` optimisation flag | not implemented (correctness only) |
 
+use alloc::{string::ToString, vec::Vec};
+// `vec!` is only used by the SIMD-only windowed kernel below.
+#[cfg(feature = "simd")]
+use alloc::vec;
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::core::error::{PureCvError, Result};
+use crate::core::logging::tags;
 use crate::core::types::{BorderTypes, Point2f, Size2i, TermCriteria, TermType};
 use crate::core::Matrix;
+use crate::cv_log_debug;
 use crate::imgproc::derivatives::sobel;
 use crate::imgproc::pyramid::pyr_down;
 
@@ -366,6 +375,15 @@ fn lk_single_level(
     let det = h00 * h11 - h01 * h01;
 
     if min_eigen < min_eigen_threshold || det.abs() < f64::EPSILON {
+        cv_log_debug!(
+            tags::VIDEO,
+            "LK tracking lost at ({:.2}, {:.2}): min_eigen = {:.6} (threshold = {:.6}), det = {:.6e}",
+            px,
+            py,
+            min_eigen,
+            min_eigen_threshold,
+            det.abs()
+        );
         return (init_u, init_v, min_eigen, false);
     }
 

@@ -34,10 +34,26 @@
  *
  */
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+/// Re-export of `alloc::format!` for use inside exported macros (e.g. `cv_bail!`).
+///
+/// Referencing it as `$crate::__format!` keeps those macros working in external
+/// crates that never declared `extern crate alloc` themselves.
+#[doc(hidden)]
+pub use alloc::format as __format;
+
 // Global modules
+//
+// `core`, `imgproc`, `calib3d`, `video`, and `version` build without `std`; the
+// `features`/`features2d` modules remain std-gated (see issue #82).
 pub mod calib3d;
 pub mod core;
+#[cfg(feature = "std")]
 pub mod features;
+#[cfg(feature = "std")]
 pub mod features2d;
 pub mod imgproc;
 pub mod version;
@@ -49,12 +65,14 @@ pub mod prelude {
         find_fundamental_mat, find_homography, init_undistort_rectify_map, rodrigues, solve_pnp,
         solve_pnp_ransac, FundamentalMatMethod, HomographyMethod, SolvePnPMethod,
     };
+    pub use crate::core::logging::{tags, LogLevel};
     pub use crate::core::types::{
         BorderTypes, Point2f, Point2i, Point3f, Rect2f, Rect2i, Scalar, Size2f, Size2i,
         TermCriteria, TermType, Vec2b, Vec2d, Vec2f, Vec2i, Vec2s, Vec3b, Vec3d, Vec3f, Vec3i,
         Vec3s, Vec4b, Vec4d, Vec4f, Vec4i, Vec4s, Vec6d, Vec6f, VecN,
     };
     pub use crate::core::Matrix;
+    #[cfg(feature = "std")]
     pub use crate::features2d::{
         draw_keypoints, draw_matches, filter_matches, BFMatcher, DMatch, DescriptorMatcher,
         FastFeatureDetector, FastType, KeyPoint, NormType, Orb,

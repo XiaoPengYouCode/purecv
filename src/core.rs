@@ -34,6 +34,24 @@
  *
  */
 
+//! Core data structures and numerical routines — the `core` module.
+//!
+//! This module mirrors OpenCV's `core` module and provides the foundational
+//! types and operations the rest of the crate builds on:
+//!
+//! - [`Matrix`] — the row-major, n-channel matrix/image container, together
+//!   with [`MatType`], [`Depth`] and the OpenCV-style type constants.
+//! - [`Scalar`] — a 4-channel per-pixel constant.
+//! - Element-wise and reduction [`arithm`]etic (`add`, `multiply`, `gemm`,
+//!   `norm`, `reduce`, …), plus [`solvers`] and matrix operations.
+//! - `dft`/`dct` frequency transforms, [`rng`] random-number generation,
+//!   [`metrics`] and [`structural`] helpers.
+//! - [`error::PureCvError`] — the crate-wide error type returned as
+//!   [`error::Result`].
+//! - [`logging`] — an OpenCV-compatible structured logging API built on the
+//!   `log` facade, with the `cv_log_*!`, [`crate::cv_bail!`] and
+//!   [`crate::cv_err!`] macros.
+
 pub mod arithm;
 pub mod constants;
 #[cfg(feature = "transforms")]
@@ -42,6 +60,7 @@ pub mod dct;
 pub mod dft;
 pub mod dynamic;
 pub mod error;
+pub mod logging;
 pub mod matrix;
 pub mod metrics;
 pub mod rng;
@@ -79,6 +98,10 @@ pub use self::dft::{
 };
 pub use self::dynamic::{DynamicData, DynamicMatrix};
 pub use self::error::{PureCvError, Result};
+pub use self::logging::{get_log_level, set_log_level, LogLevel};
+// `init_basic_logger` writes to stdout and is only available with `std`.
+#[cfg(feature = "std")]
+pub use self::logging::init_basic_logger;
 pub use self::matrix::{
     DataType, Depth, MatType, Matrix, CV_16S, CV_16SC1, CV_16SC2, CV_16SC3, CV_16SC4, CV_16U,
     CV_16UC1, CV_16UC2, CV_16UC3, CV_16UC4, CV_32F, CV_32FC1, CV_32FC2, CV_32FC3, CV_32FC4, CV_32S,
@@ -86,6 +109,7 @@ pub use self::matrix::{
     CV_8SC1, CV_8SC2, CV_8SC3, CV_8SC4, CV_8U, CV_8UC1, CV_8UC2, CV_8UC3, CV_8UC4,
 };
 pub use self::metrics::{mahalanobis, psnr};
+#[cfg(feature = "std")]
 pub use self::rng::{rand_shuffle, randn, randu, set_rng_seed};
 pub use self::solvers::{solve_cubic, solve_quadratic};
 pub use self::types::{
@@ -96,6 +120,8 @@ pub use self::types::{
     KMEANS_RANDOM_CENTERS, KMEANS_USE_INITIAL_LABELS, SORT_ASCENDING, SORT_DESCENDING,
     SORT_EVERY_COLUMN, SORT_EVERY_ROW,
 };
+pub use self::utils::border_interpolate;
 #[cfg(not(feature = "parallel"))]
 pub use self::utils::ParIterFallback;
-pub use self::utils::{border_interpolate, get_tick_count, get_tick_frequency};
+#[cfg(feature = "std")]
+pub use self::utils::{get_tick_count, get_tick_frequency};

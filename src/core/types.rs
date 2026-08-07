@@ -34,11 +34,13 @@
  *
  */
 
-use std::ops::{Add, Div, Index, IndexMut, Mul, Sub};
+use core::ops::{Add, Div, Index, IndexMut, Mul, Sub};
 
 use num_traits::{CheckedDiv, Zero};
 
-use crate::core::error::{PureCvError, Result};
+use crate::core::error::Result;
+use crate::core::logging::tags;
+use crate::cv_err;
 
 pub type Uchar = u8;
 pub type Schar = i8;
@@ -402,7 +404,7 @@ impl<T: Copy + Default + CheckedDiv> Scalar<T> {
     /// `Div<Scalar<T>>` impl.
     ///
     /// # Errors
-    /// Returns [`PureCvError::InvalidInput`] naming the first channel whose
+    /// Returns [`crate::core::error::PureCvError::InvalidInput`] naming the first channel whose
     /// divisor is zero.
     ///
     /// # Example
@@ -418,7 +420,12 @@ impl<T: Copy + Default + CheckedDiv> Scalar<T> {
     pub fn checked_div(self, rhs: Scalar<T>) -> Result<Self> {
         let div_ch = |a: T, b: T, ch: usize| {
             a.checked_div(&b).ok_or_else(|| {
-                PureCvError::InvalidInput(format!("Division by zero in channel {ch}"))
+                cv_err!(
+                    tags::CORE,
+                    InvalidInput,
+                    "checked_div: division by zero in channel {}",
+                    ch
+                )
             })
         };
         Ok(Self {
@@ -636,7 +643,7 @@ impl<T: Zero, const N: usize> VecN<T, N> {
     /// numeric types and guarantees that each element is the additive identity.
     pub fn zeros() -> Self {
         Self {
-            val: std::array::from_fn(|_| T::zero()),
+            val: core::array::from_fn(|_| T::zero()),
         }
     }
 }
@@ -645,7 +652,7 @@ impl<T: Copy, const N: usize> VecN<T, N> {
     /// Returns a vector with every element set to `v`.
     pub fn all(v: T) -> Self {
         Self {
-            val: std::array::from_fn(|_| v),
+            val: core::array::from_fn(|_| v),
         }
     }
 }
@@ -683,7 +690,7 @@ impl<T: Copy + Add<Output = T>, const N: usize> Add for VecN<T, N> {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] + rhs.val[i]),
+            val: core::array::from_fn(|i| self.val[i] + rhs.val[i]),
         }
     }
 }
@@ -692,7 +699,7 @@ impl<T: Copy + Sub<Output = T>, const N: usize> Sub for VecN<T, N> {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] - rhs.val[i]),
+            val: core::array::from_fn(|i| self.val[i] - rhs.val[i]),
         }
     }
 }
@@ -705,7 +712,7 @@ impl<T: Copy + Default + Add<Output = T>, const N: usize> Add<Scalar<T>> for Vec
     type Output = Self;
     fn add(self, rhs: Scalar<T>) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] + rhs.channel_or_default(i)),
+            val: core::array::from_fn(|i| self.val[i] + rhs.channel_or_default(i)),
         }
     }
 }
@@ -716,7 +723,7 @@ impl<T: Copy + Default + Sub<Output = T>, const N: usize> Sub<Scalar<T>> for Vec
     type Output = Self;
     fn sub(self, rhs: Scalar<T>) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] - rhs.channel_or_default(i)),
+            val: core::array::from_fn(|i| self.val[i] - rhs.channel_or_default(i)),
         }
     }
 }
@@ -726,7 +733,7 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul for VecN<T, N> {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] * rhs.val[i]),
+            val: core::array::from_fn(|i| self.val[i] * rhs.val[i]),
         }
     }
 }
@@ -736,7 +743,7 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul<T> for VecN<T, N> {
     type Output = Self;
     fn mul(self, rhs: T) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] * rhs),
+            val: core::array::from_fn(|i| self.val[i] * rhs),
         }
     }
 }
@@ -746,7 +753,7 @@ impl<T: Copy + Div<Output = T>, const N: usize> Div<T> for VecN<T, N> {
     type Output = Self;
     fn div(self, rhs: T) -> Self {
         Self {
-            val: std::array::from_fn(|i| self.val[i] / rhs),
+            val: core::array::from_fn(|i| self.val[i] / rhs),
         }
     }
 }
