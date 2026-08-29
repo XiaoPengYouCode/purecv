@@ -34,13 +34,17 @@
  *
  */
 
+use core::cmp::Ordering;
+
 use alloc::{vec, vec::Vec};
-use core::f64;
+#[allow(unused_imports)]
+use num_traits::Float;
 use num_traits::ToPrimitive;
 
 use crate::core::error::Result;
 use crate::core::logging::tags;
-use crate::core::types::Size2i;
+use crate::core::types::{BorderTypes, Size2i};
+use crate::core::utils::border_interpolate;
 use crate::core::Matrix;
 use crate::cv_bail;
 
@@ -111,6 +115,9 @@ fn read_pixel_f32<T: ToPrimitive + Clone + Default>(
 
 #[inline(always)]
 fn uniform_bin(val: f32, range_lo: f32, range_hi: f32, hist_size: usize) -> Option<usize> {
+    if hist_size == 0 {
+        return None;
+    }
     if val < range_lo || val >= range_hi {
         return None;
     }
@@ -120,13 +127,16 @@ fn uniform_bin(val: f32, range_lo: f32, range_hi: f32, hist_size: usize) -> Opti
 
 #[inline(always)]
 fn nonuniform_bin(val: f32, boundaries: &[f32], hist_size: usize) -> Option<usize> {
-    if boundaries.is_empty() || val < boundaries[0] || val >= boundaries[hist_size] {
+    if hist_size == 0 || boundaries.len() <= hist_size {
+        return None;
+    }
+    if val < boundaries[0] || val >= boundaries[hist_size] {
         return None;
     }
     // Find the first boundary that is strictly greater than val,
     // then subtract 1 to get the bin index.
     match boundaries[..=hist_size]
-        .binary_search_by(|b| b.partial_cmp(&val).unwrap_or(core::cmp::Ordering::Less))
+        .binary_search_by(|b| b.partial_cmp(&val).unwrap_or(Ordering::Less))
     {
         Ok(idx) => {
             // val == boundaries[idx]: bin is idx (left-inclusive)
@@ -247,14 +257,81 @@ pub fn calc_hist<T: ToPrimitive + Clone + Default>(
         let _ = resolve_channel(ch, images)?;
     }
 
+    // Validate hist_size and ranges (prevents panics in bin mapping)
+    for (d, &sz) in hist_size.iter().enumerate() {
+        if sz == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "calc_hist: hist_size[{}] must be > 0 (got 0)",
+                d
+            );
+        }
+        match &ranges[d] {
+            RangeSpec::Uniform(lo, hi) => {
+                if lo.partial_cmp(hi) != Some(Ordering::Less) {
+                    cv_bail!(
+                        tags::IMGPROC,
+                        InvalidInput,
+                        "calc_hist: Uniform range [{}] must satisfy lo < hi (got {} >= {})",
+                        d,
+                        lo,
+                        hi
+                    );
+                }
+            }
+            RangeSpec::NonUniform(boundaries) => {
+                if boundaries.len() != sz + 1 {
+                    cv_bail!(
+                        tags::IMGPROC,
+                        InvalidInput,
+                        "calc_hist: NonUniform boundaries[{}] length {} must be hist_size[{}]+1 ({})",
+                        d,
+                        boundaries.len(),
+                        d,
+                        sz + 1
+                    );
+                }
+                for k in 0..boundaries.len() - 1 {
+                    if boundaries[k].partial_cmp(&boundaries[k + 1]) != Some(Ordering::Less) {
+                        cv_bail!(
+                            tags::IMGPROC,
+                            InvalidInput,
+                            "calc_hist: NonUniform boundaries[{}][{}] ({}) must be < boundaries[{}][{}] ({})",
+                            d,
+                            k,
+                            boundaries[k],
+                            d,
+                            k + 1,
+                            boundaries[k + 1]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let total_bins: usize = hist_size.iter().product();
 
-    let mut hist_data = if accumulate {
+    // Validate accumulate histogram size to prevent OOB
+    if accumulate {
         if let Some(h) = hist {
-            h.data.clone()
-        } else {
-            vec![0.0f32; total_bins]
+            let hist_len = h.data.len();
+            if hist_len != total_bins {
+                cv_bail!(
+                    tags::IMGPROC,
+                    InvalidInput,
+                    "calc_hist: accumulate hist length {} does not match product(hist_size) {}",
+                    hist_len,
+                    total_bins
+                );
+            }
         }
+    }
+
+    let mut hist_data = if accumulate {
+        hist.map(|h| h.data.clone())
+            .unwrap_or_else(|| vec![0.0f32; total_bins])
     } else {
         vec![0.0f32; total_bins]
     };
@@ -348,6 +425,13 @@ pub fn calc_back_project<T: ToPrimitive + Clone + Default>(
     let cols = images[0].cols;
 
     let total_bins = hist.rows * hist.cols * hist.channels;
+    if total_bins == 0 {
+        cv_bail!(
+            tags::IMGPROC,
+            InvalidInput,
+            "calc_back_project: hist must not be empty"
+        );
+    }
     let hist_size = infer_hist_size(total_bins, dims);
 
     let mut strides = vec![1usize; dims];
@@ -422,6 +506,13 @@ pub fn compare_hist(h1: &Matrix<f32>, h2: &Matrix<f32>, method: HistCompMethods)
             "compare_hist: histograms must have the same size ({} vs {})",
             len,
             h2.data.len()
+        );
+    }
+    if len == 0 {
+        cv_bail!(
+            tags::IMGPROC,
+            InvalidInput,
+            "compare_hist: histograms must not be empty"
         );
     }
 
@@ -601,10 +692,12 @@ pub struct Clahe {
 
 impl Clahe {
     pub fn new(clip_limit: f64, tile_grid_size: Size2i) -> Self {
+        let tiles_x = tile_grid_size.width.max(0) as usize;
+        let tiles_y = tile_grid_size.height.max(0) as usize;
         Self {
             clip_limit,
-            tiles_x: tile_grid_size.width as usize,
-            tiles_y: tile_grid_size.height as usize,
+            tiles_x,
+            tiles_y,
             bit_shift: 0,
         }
     }
@@ -618,8 +711,8 @@ impl Clahe {
     }
 
     pub fn set_tiles_grid_size(&mut self, tile_grid_size: Size2i) {
-        self.tiles_x = tile_grid_size.width as usize;
-        self.tiles_y = tile_grid_size.height as usize;
+        self.tiles_x = tile_grid_size.width.max(0) as usize;
+        self.tiles_y = tile_grid_size.height.max(0) as usize;
     }
 
     pub fn get_tiles_grid_size(&self) -> Size2i {
@@ -663,20 +756,69 @@ impl Clahe {
     }
 
     fn apply_impl_u8(&self, src: &Matrix<u8>) -> Result<Matrix<u8>> {
-        let hist_size = 256 >> self.bit_shift;
+        if self.tiles_x == 0 || self.tiles_y == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: tiles_x and tiles_y must be > 0 (got {}x{})",
+                self.tiles_x,
+                self.tiles_y
+            );
+        }
+        if self.bit_shift < 0 || self.bit_shift > 7 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: bit_shift must be in 0..=7 for u8 (got {})",
+                self.bit_shift
+            );
+        }
+        if src.rows == 0 || src.cols == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: source must not be empty"
+            );
+        }
+        let hist_size = 256usize >> self.bit_shift;
+        // Defensive: unreachable since bit_shift is validated to 0..=7 above.
+        if hist_size == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: invalid hist_size 0 (bit_shift {})",
+                self.bit_shift
+            );
+        }
 
-        let (pad_top, _pad_bottom) = claes_pad(src.rows, self.tiles_y);
-        let (pad_left, _pad_right) = claes_pad(src.cols, self.tiles_x);
-        let need_pad = pad_top > 0 || pad_left > 0;
+        // OpenCV parity: pad bottom/right with BORDER_REFLECT_101 so dimensions become divisible
+        let pad_bottom = (self.tiles_y - src.rows % self.tiles_y) % self.tiles_y;
+        let pad_right = (self.tiles_x - src.cols % self.tiles_x) % self.tiles_x;
+        let need_pad = pad_bottom > 0 || pad_right > 0;
 
         let padded = if need_pad {
-            pad_reflect101_u8(src, pad_top, pad_left)?
+            pad_reflect101(src, pad_bottom, pad_right)
         } else {
             src.clone()
         };
 
         let tile_rows = padded.rows / self.tiles_y;
         let tile_cols = padded.cols / self.tiles_x;
+        // Defensive: unreachable given a non-empty src and validated tiles,
+        // since padding above makes the padded dims divisible by the grid.
+        if tile_rows == 0 || tile_cols == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: tile size must be > 0 (padded {}x{} / tiles {}x{} -> tile {}x{})",
+                padded.rows,
+                padded.cols,
+                self.tiles_x,
+                self.tiles_y,
+                tile_cols,
+                tile_rows
+            );
+        }
         let tile_size_total = tile_rows * tile_cols;
 
         let lut_scale = (hist_size as f64 - 1.0) / tile_size_total as f64;
@@ -687,8 +829,23 @@ impl Clahe {
             clip_limit = clip_limit.max(1);
         }
 
-        let num_tiles = self.tiles_x * self.tiles_y;
-        let mut lut = vec![0u8; num_tiles * hist_size];
+        let num_tiles = match self.tiles_x.checked_mul(self.tiles_y) {
+            Some(v) => v,
+            None => cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: tiles_x * tiles_y overflow"
+            ),
+        };
+        let lut_len = match num_tiles.checked_mul(hist_size) {
+            Some(v) => v,
+            None => cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u8: lut size overflow"
+            ),
+        };
+        let mut lut = vec![0u8; lut_len];
 
         for tile_idx in 0..num_tiles {
             let ty = tile_idx / self.tiles_x;
@@ -722,11 +879,8 @@ impl Clahe {
             src,
             &mut dst,
             &lut,
-            &padded,
             tile_rows,
             tile_cols,
-            pad_top,
-            pad_left,
             self.bit_shift,
             self.tiles_x,
             self.tiles_y,
@@ -736,20 +890,68 @@ impl Clahe {
     }
 
     fn apply_impl_u16(&self, src: &Matrix<u16>) -> Result<Matrix<u16>> {
-        let hist_size = 65536 >> self.bit_shift;
+        if self.tiles_x == 0 || self.tiles_y == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: tiles_x and tiles_y must be > 0 (got {}x{})",
+                self.tiles_x,
+                self.tiles_y
+            );
+        }
+        if self.bit_shift < 0 || self.bit_shift > 15 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: bit_shift must be in 0..=15 for u16 (got {})",
+                self.bit_shift
+            );
+        }
+        if src.rows == 0 || src.cols == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: source must not be empty"
+            );
+        }
+        let hist_size = 65536usize >> self.bit_shift;
+        // Defensive: unreachable since bit_shift is validated to 0..=15 above.
+        if hist_size == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: invalid hist_size 0 (bit_shift {})",
+                self.bit_shift
+            );
+        }
 
-        let (pad_top, _pad_bottom) = claes_pad(src.rows, self.tiles_y);
-        let (pad_left, _pad_right) = claes_pad(src.cols, self.tiles_x);
-        let need_pad = pad_top > 0 || pad_left > 0;
+        let pad_bottom = (self.tiles_y - src.rows % self.tiles_y) % self.tiles_y;
+        let pad_right = (self.tiles_x - src.cols % self.tiles_x) % self.tiles_x;
+        let need_pad = pad_bottom > 0 || pad_right > 0;
 
         let padded = if need_pad {
-            pad_reflect101_u16(src, pad_top, pad_left)?
+            pad_reflect101(src, pad_bottom, pad_right)
         } else {
             src.clone()
         };
 
         let tile_rows = padded.rows / self.tiles_y;
         let tile_cols = padded.cols / self.tiles_x;
+        // Defensive: unreachable given a non-empty src and validated tiles,
+        // since padding above makes the padded dims divisible by the grid.
+        if tile_rows == 0 || tile_cols == 0 {
+            cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: tile size must be > 0 (padded {}x{} / tiles {}x{} -> tile {}x{})",
+                padded.rows,
+                padded.cols,
+                self.tiles_x,
+                self.tiles_y,
+                tile_cols,
+                tile_rows
+            );
+        }
         let tile_size_total = tile_rows * tile_cols;
 
         let lut_scale = (hist_size as f64 - 1.0) / tile_size_total as f64;
@@ -760,8 +962,23 @@ impl Clahe {
             clip_limit = clip_limit.max(1);
         }
 
-        let num_tiles = self.tiles_x * self.tiles_y;
-        let mut lut = vec![0u16; num_tiles * hist_size];
+        let num_tiles = match self.tiles_x.checked_mul(self.tiles_y) {
+            Some(v) => v,
+            None => cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: tiles_x * tiles_y overflow"
+            ),
+        };
+        let lut_len = match num_tiles.checked_mul(hist_size) {
+            Some(v) => v,
+            None => cv_bail!(
+                tags::IMGPROC,
+                InvalidInput,
+                "Clahe::apply_u16: lut size overflow"
+            ),
+        };
+        let mut lut = vec![0u16; lut_len];
 
         for tile_idx in 0..num_tiles {
             let ty = tile_idx / self.tiles_x;
@@ -797,8 +1014,6 @@ impl Clahe {
             &lut,
             tile_rows,
             tile_cols,
-            pad_top,
-            pad_left,
             self.bit_shift,
             self.tiles_x,
             self.tiles_y,
@@ -812,6 +1027,8 @@ fn clip_and_redistribute(tile_hist: &mut [i32], clip_limit: i32, hist_size: usiz
     if clip_limit <= 0 {
         return;
     }
+    // Exact port of OpenCV's CLAHE_CalcLut_Body redistribution (clahe.cpp):
+    // uniform batch plus fixed-step residual.
     let mut clipped = 0i32;
     for bin in tile_hist.iter_mut() {
         if *bin > clip_limit {
@@ -844,11 +1061,8 @@ fn interpolate_tiles_u8(
     src: &Matrix<u8>,
     dst: &mut Matrix<u8>,
     lut: &[u8],
-    _padded: &Matrix<u8>,
     tile_rows: usize,
     tile_cols: usize,
-    pad_top: usize,
-    pad_left: usize,
     bit_shift: i32,
     tiles_x: usize,
     tiles_y: usize,
@@ -856,10 +1070,11 @@ fn interpolate_tiles_u8(
 ) {
     let inv_tw = 1.0f64 / tile_cols as f64;
     let inv_th = 1.0f64 / tile_rows as f64;
+    let lut_idx =
+        |ty: usize, tx: usize, bin: usize| ty * tiles_x * hist_size + tx * hist_size + bin;
 
     for y in 0..src.rows {
-        let sy = y + pad_top;
-        let tyf = sy as f64 * inv_th - 0.5;
+        let tyf = y as f64 * inv_th - 0.5;
         let ty1 = (tyf.floor() as i32).max(0);
         let ty2 = (ty1 + 1).min(tiles_y as i32 - 1);
         let ya = tyf - ty1 as f64;
@@ -868,8 +1083,7 @@ fn interpolate_tiles_u8(
         let ty2 = ty2 as usize;
 
         for x in 0..src.cols {
-            let sx = x + pad_left;
-            let txf = sx as f64 * inv_tw - 0.5;
+            let txf = x as f64 * inv_tw - 0.5;
             let tx1 = (txf.floor() as i32).max(0);
             let tx2 = (tx1 + 1).min(tiles_x as i32 - 1);
             let xa = txf - tx1 as f64;
@@ -880,12 +1094,10 @@ fn interpolate_tiles_u8(
             let src_val = *src.get(y, x, 0).unwrap_or(&0) as usize;
             let bin = (src_val >> bit_shift).min(hist_size - 1);
 
-            let lut_idx = |ty: usize, tx: usize| ty * tiles_x * hist_size + tx * hist_size + bin;
-
-            let v00 = lut[lut_idx(ty1, tx1)] as f64;
-            let v01 = lut[lut_idx(ty1, tx2)] as f64;
-            let v10 = lut[lut_idx(ty2, tx1)] as f64;
-            let v11 = lut[lut_idx(ty2, tx2)] as f64;
+            let v00 = lut[lut_idx(ty1, tx1, bin)] as f64;
+            let v01 = lut[lut_idx(ty1, tx2, bin)] as f64;
+            let v10 = lut[lut_idx(ty2, tx1, bin)] as f64;
+            let v11 = lut[lut_idx(ty2, tx2, bin)] as f64;
 
             let val = (v00 * xa1 + v01 * xa) * ya1 + (v10 * xa1 + v11 * xa) * ya;
             let out = (val.round() as u8) << bit_shift;
@@ -901,8 +1113,6 @@ fn interpolate_tiles_u16(
     lut: &[u16],
     tile_rows: usize,
     tile_cols: usize,
-    pad_top: usize,
-    pad_left: usize,
     bit_shift: i32,
     tiles_x: usize,
     tiles_y: usize,
@@ -910,10 +1120,11 @@ fn interpolate_tiles_u16(
 ) {
     let inv_tw = 1.0f64 / tile_cols as f64;
     let inv_th = 1.0f64 / tile_rows as f64;
+    let lut_idx =
+        |ty: usize, tx: usize, bin: usize| ty * tiles_x * hist_size + tx * hist_size + bin;
 
     for y in 0..src.rows {
-        let sy = y + pad_top;
-        let tyf = sy as f64 * inv_th - 0.5;
+        let tyf = y as f64 * inv_th - 0.5;
         let ty1 = (tyf.floor() as i32).max(0);
         let ty2 = (ty1 + 1).min(tiles_y as i32 - 1);
         let ya = tyf - ty1 as f64;
@@ -922,8 +1133,7 @@ fn interpolate_tiles_u16(
         let ty2 = ty2 as usize;
 
         for x in 0..src.cols {
-            let sx = x + pad_left;
-            let txf = sx as f64 * inv_tw - 0.5;
+            let txf = x as f64 * inv_tw - 0.5;
             let tx1 = (txf.floor() as i32).max(0);
             let tx2 = (tx1 + 1).min(tiles_x as i32 - 1);
             let xa = txf - tx1 as f64;
@@ -934,12 +1144,10 @@ fn interpolate_tiles_u16(
             let src_val = *src.get(y, x, 0).unwrap_or(&0) as usize;
             let bin = (src_val >> bit_shift).min(hist_size - 1);
 
-            let lut_idx = |ty: usize, tx: usize| ty * tiles_x * hist_size + tx * hist_size + bin;
-
-            let v00 = lut[lut_idx(ty1, tx1)] as f64;
-            let v01 = lut[lut_idx(ty1, tx2)] as f64;
-            let v10 = lut[lut_idx(ty2, tx1)] as f64;
-            let v11 = lut[lut_idx(ty2, tx2)] as f64;
+            let v00 = lut[lut_idx(ty1, tx1, bin)] as f64;
+            let v01 = lut[lut_idx(ty1, tx2, bin)] as f64;
+            let v10 = lut[lut_idx(ty2, tx1, bin)] as f64;
+            let v11 = lut[lut_idx(ty2, tx2, bin)] as f64;
 
             let val = (v00 * xa1 + v01 * xa) * ya1 + (v10 * xa1 + v11 * xa) * ya;
             let out = (val.round() as u16) << bit_shift;
@@ -948,60 +1156,23 @@ fn interpolate_tiles_u16(
     }
 }
 
-fn claes_pad(original: usize, grid: usize) -> (usize, usize) {
-    if grid == 0 {
-        return (0, 0);
-    }
-    let rem = original % grid;
-    if rem == 0 {
-        (0, 0)
-    } else {
-        (0, grid - rem)
-    }
-}
-
-fn pad_reflect101_u8(src: &Matrix<u8>, top: usize, left: usize) -> Result<Matrix<u8>> {
-    let new_rows = src.rows + top;
-    let new_cols = src.cols + left;
-    let mut dst = Matrix::<u8>::new(new_rows, new_cols, 1);
+fn pad_reflect101<T: Copy + Default>(
+    src: &Matrix<T>,
+    pad_bottom: usize,
+    pad_right: usize,
+) -> Matrix<T> {
+    let new_rows = src.rows + pad_bottom;
+    let new_cols = src.cols + pad_right;
+    let mut dst = Matrix::<T>::new(new_rows, new_cols, 1);
     for y in 0..new_rows {
+        let sy = border_interpolate(y as i32, src.rows as i32, BorderTypes::Reflect101) as usize;
         for x in 0..new_cols {
-            let sy = reflect_coord(y, top, src.rows);
-            let sx = reflect_coord(x, left, src.cols);
-            dst.set(y, x, 0, *src.get(sy, sx, 0).unwrap_or(&0));
+            let sx =
+                border_interpolate(x as i32, src.cols as i32, BorderTypes::Reflect101) as usize;
+            dst.set(y, x, 0, *src.get(sy, sx, 0).unwrap_or(&T::default()));
         }
     }
-    Ok(dst)
-}
-
-fn pad_reflect101_u16(src: &Matrix<u16>, top: usize, left: usize) -> Result<Matrix<u16>> {
-    let new_rows = src.rows + top;
-    let new_cols = src.cols + left;
-    let mut dst = Matrix::<u16>::new(new_rows, new_cols, 1);
-    for y in 0..new_rows {
-        for x in 0..new_cols {
-            let sy = reflect_coord(y, top, src.rows);
-            let sx = reflect_coord(x, left, src.cols);
-            dst.set(y, x, 0, *src.get(sy, sx, 0).unwrap_or(&0));
-        }
-    }
-    Ok(dst)
-}
-
-fn reflect_coord(p: usize, pad: usize, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let adjusted = p as i32 - pad as i32;
-    let result = if adjusted < 0 {
-        ((-adjusted - 1) as usize) % len
-    } else if adjusted >= len as i32 {
-        let over = (adjusted - len as i32) as usize;
-        (len - 1).wrapping_sub(over % len)
-    } else {
-        adjusted as usize
-    };
-    result.min(len - 1)
+    dst
 }
 
 pub fn create_clahe(clip_limit: f64, tile_grid_size: Size2i) -> Clahe {
