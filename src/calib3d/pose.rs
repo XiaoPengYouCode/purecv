@@ -111,7 +111,8 @@ pub enum SolvePnPMethod {
 /// # Errors
 ///
 /// Returns [`PureCvError::InvalidInput`] when fewer than 4 correspondences are
-/// given or the camera matrix is singular.
+/// given, the camera matrix is singular, or `use_extrinsic_guess` is set while
+/// `rvec`/`tvec` are not 3×1 vectors.
 ///
 /// # Divergences from OpenCV
 ///
@@ -156,11 +157,15 @@ pub fn solve_pnp(
     }
 
     let _ = dist_coeffs; // Distortion correction not yet implemented.
-    if use_extrinsic_guess {
-        return Err(PureCvError::NotImplemented(
-            "use_extrinsic_guess is not supported yet".to_string(),
-        ));
-    }
+
+    // When `use_extrinsic_guess` is true, OpenCV (`findExtrinsicCameraParams2`)
+    // uses the input `rvec`/`tvec` directly as the LM start point instead of
+    // the SVD-based auto-initialisation.
+    let guess = if use_extrinsic_guess {
+        Some(read_guess(rvec, tvec)?)
+    } else {
+        None
+    };
 
     // Extract K entries.
     let k = extract_k(camera_matrix)?;
@@ -168,22 +173,14 @@ pub fn solve_pnp(
     // Undistort image points (only pin-hole in this release).
     let norm_pts = undistort_points(image_points, &k)?;
 
-    // DLT initial estimate.
-    let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
-
-    // Gauss-Newton refinement.
-    let (r_ref, t_ref) = if use_extrinsic_guess
-        && rvec.rows == 3
-        && rvec.cols == 1
-        && tvec.rows == 3
-        && tvec.cols == 1
-    {
-        let rv = [rvec.data[0], rvec.data[1], rvec.data[2]];
-        let r_guess = rvec_to_rmat(rv[0], rv[1], rv[2]);
-        let t_guess = [tvec.data[0], tvec.data[1], tvec.data[2]];
-        gauss_newton_refine(&norm_pts, object_points, &r_guess, &t_guess)
-    } else {
-        gauss_newton_refine(&norm_pts, object_points, &r_init, &t_init)
+    // Gauss-Newton refinement, seeded from the guess when one was supplied,
+    // otherwise from the DLT initial estimate.
+    let (r_ref, t_ref) = match &guess {
+        Some((r_guess, t_guess)) => gauss_newton_refine(&norm_pts, object_points, r_guess, t_guess),
+        None => {
+            let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
+            gauss_newton_refine(&norm_pts, object_points, &r_init, &t_init)
+        }
     };
 
     // Convert rotation matrix → rotation vector.
@@ -259,11 +256,18 @@ pub fn solve_pnp_ransac(
             "Only Iterative method is supported".to_string(),
         ));
     }
-    if use_extrinsic_guess {
-        return Err(PureCvError::NotImplemented(
-            "use_extrinsic_guess is not supported in ransac yet".to_string(),
-        ));
-    }
+
+    // OpenCV (`PnPRansacCallback::runKernel`) threads the extrinsic guess into
+    // every minimal-set hypothesis: the guess is cloned into the per-iteration
+    // `rvec`/`tvec` and the hypothesis solver runs with `useExtrinsicGuess`.
+    // Mirror that here: when a guess is supplied, each minimal-set DLT pose is
+    // refined starting from the guess before inlier counting, and the final
+    // all-inlier refit is seeded from the guess as well.
+    let guess = if use_extrinsic_guess {
+        Some(read_guess(rvec, tvec)?)
+    } else {
+        None
+    };
 
     let _ = confidence; // Adaptive iteration count not yet implemented.
     let _ = dist_coeffs; // Distortion correction not yet implemented.
@@ -295,11 +299,18 @@ pub fn solve_pnp_ransac(
         let s_obj: Vec<Point3f> = idx.iter().map(|&i| object_points[i]).collect();
         let s_img: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
 
-        let (r, t) = match dlt_pnp(&s_img, &s_obj) {
-            Ok(rt) => rt,
-            Err(_) => continue,
+        let (r, t) = match &guess {
+            Some((r_guess, t_guess)) => {
+                // ITERATIVE + guess: OpenCV skips the DLT auto-initialisation
+                // and refines directly from the guess (`runKernel` calls
+                // `solvePnP(..., useExtrinsicGuess=true)` per minimal set).
+                gauss_newton_refine(&s_img, &s_obj, r_guess, t_guess)
+            }
+            None => match dlt_pnp(&s_img, &s_obj) {
+                Ok((r, t)) => gauss_newton_refine(&s_img, &s_obj, &r, &t),
+                Err(_) => continue,
+            },
         };
-        let (r, t) = gauss_newton_refine(&s_img, &s_obj, &r, &t);
 
         // Count inliers using reprojection error in *normalized* coordinates.
         let (count, mask) = count_pnp_inliers(&norm_pts, object_points, &r, &t, thr2);
@@ -338,9 +349,12 @@ pub fn solve_pnp_ransac(
         .filter_map(|(&p, &ok)| if ok { Some(p) } else { None })
         .collect();
 
-    let (r_final, t_final) = match dlt_pnp(&in_img, &in_obj) {
-        Ok(rt) => gauss_newton_refine(&in_img, &in_obj, &rt.0, &rt.1),
-        Err(_) => (best_r, best_t),
+    let (r_final, t_final) = match &guess {
+        Some((r_guess, t_guess)) => gauss_newton_refine(&in_img, &in_obj, r_guess, t_guess),
+        None => match dlt_pnp(&in_img, &in_obj) {
+            Ok(rt) => gauss_newton_refine(&in_img, &in_obj, &rt.0, &rt.1),
+            Err(_) => (best_r, best_t),
+        },
     };
 
     write_output(r_final, t_final, rvec, tvec);
@@ -771,6 +785,26 @@ fn rmat_to_rvec_approx(r: &[f64; 9]) -> [f64; 3] {
         factor * (r[2] - r[6]),
         factor * (r[3] - r[1]),
     ]
+}
+
+/// Read the user-supplied extrinsic guess from `rvec`/`tvec`.
+///
+/// OpenCV requires both to be 3×1 vectors when `useExtrinsicGuess` is set;
+/// anything else is an invalid-argument error rather than silent fallback.
+fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<([f64; 9], [f64; 3])> {
+    if rvec.rows != 3 || rvec.cols != 1 || rvec.data.len() != 3 {
+        return Err(PureCvError::InvalidInput(
+            "use_extrinsic_guess requires rvec to be a 3x1 matrix".to_string(),
+        ));
+    }
+    if tvec.rows != 3 || tvec.cols != 1 || tvec.data.len() != 3 {
+        return Err(PureCvError::InvalidInput(
+            "use_extrinsic_guess requires tvec to be a 3x1 matrix".to_string(),
+        ));
+    }
+    let r_guess = rvec_to_rmat(rvec.data[0], rvec.data[1], rvec.data[2]);
+    let t_guess = [tvec.data[0], tvec.data[1], tvec.data[2]];
+    Ok((r_guess, t_guess))
 }
 
 /// Write rotation + translation to output matrices.
