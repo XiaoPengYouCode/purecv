@@ -417,7 +417,6 @@ mod calib3d_tests {
         let cam = make_camera_matrix();
         let (obj, img) = make_pnp_data(true_rv, true_tv, &k);
 
-        // Perturbed ground-truth pose as the VIO-style prior seed.
         let mut rvec = Matrix::from_vec(
             3,
             1,
@@ -461,7 +460,6 @@ mod calib3d_tests {
         let cam = make_camera_matrix();
         let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
         let (obj, img) = make_pnp_data([0.1, 0.05, 0.02], [0.0, 0.0, 5.0], &k);
-        // 1x1 outputs are not a valid extrinsic guess.
         let mut rvec = Matrix::<f64>::new(1, 1, 1);
         let mut tvec = Matrix::<f64>::new(1, 1, 1);
         assert!(solve_pnp(
@@ -478,6 +476,75 @@ mod calib3d_tests {
     }
 
     #[test]
+    fn test_solve_pnp_guess_rejects_non_finite() {
+        let cam = make_camera_matrix();
+        let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+        let (obj, img) = make_pnp_data([0.1, 0.05, 0.02], [0.0, 0.0, 5.0], &k);
+        let mut rvec = Matrix::from_vec(3, 1, 1, vec![f64::NAN, 0.0, 0.0]);
+        let mut tvec = Matrix::from_vec(3, 1, 1, vec![0.0, 0.0, 5.0]);
+        assert!(solve_pnp(
+            &obj,
+            &img,
+            &cam,
+            None,
+            &mut rvec,
+            &mut tvec,
+            true,
+            SolvePnPMethod::Iterative
+        )
+        .is_err());
+        let mut rvec = Matrix::from_vec(3, 1, 1, vec![0.1, 0.05, 0.02]);
+        let mut tvec = Matrix::from_vec(3, 1, 1, vec![0.0, 0.0, f64::INFINITY]);
+        assert!(solve_pnp(
+            &obj,
+            &img,
+            &cam,
+            None,
+            &mut rvec,
+            &mut tvec,
+            true,
+            SolvePnPMethod::Iterative
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_solve_pnp_guess_near_half_turn() {
+        let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+        let axis_norm = (1.0f64 + 4.0 + 4.0).sqrt();
+        let theta = core::f64::consts::PI - 1e-3;
+        let true_rv = [
+            theta / axis_norm,
+            2.0 * theta / axis_norm,
+            2.0 * theta / axis_norm,
+        ];
+        let true_tv = [0.0f64, 0.0, 6.0];
+        let cam = make_camera_matrix();
+        let (obj, img) = make_pnp_data(true_rv, true_tv, &k);
+
+        let mut rvec = Matrix::from_vec(3, 1, 1, true_rv.to_vec());
+        let mut tvec = Matrix::from_vec(3, 1, 1, vec![0.1, -0.1, 5.8]);
+        let ok = solve_pnp(
+            &obj,
+            &img,
+            &cam,
+            None,
+            &mut rvec,
+            &mut tvec,
+            true,
+            SolvePnPMethod::Iterative,
+        )
+        .unwrap();
+        assert!(ok);
+        assert!(
+            approx_eq(tvec.data[2], true_tv[2], 0.5),
+            "tz={} expected ~{}",
+            tvec.data[2],
+            true_tv[2]
+        );
+    }
+
+    #[test]
     fn test_solve_pnp_ransac_with_extrinsic_guess() {
         use crate::calib3d::geometry::rvec_to_rmat;
         let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
@@ -485,7 +552,6 @@ mod calib3d_tests {
         let true_tv = [0.0f64, 0.0, 6.0];
         let cam = make_camera_matrix();
         let r = rvec_to_rmat(true_rv[0], true_rv[1], true_rv[2]);
-        // 20 non-coplanar points so RANSAC can draw clean minimal sets.
         let mut obj = Vec::new();
         for i in 0..20 {
             let fi = i as f32;
@@ -507,7 +573,6 @@ mod calib3d_tests {
                 }
             })
             .collect();
-        // Inject outliers (15% contamination).
         img[3] = Point2f { x: 10.0, y: 10.0 };
         img[11] = Point2f { x: 630.0, y: 470.0 };
         img[17] = Point2f { x: 5.0, y: 475.0 };
