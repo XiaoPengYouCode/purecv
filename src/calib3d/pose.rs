@@ -82,10 +82,11 @@ pub enum SolvePnPMethod {
 
 /// Finds the object pose from 3-D / 2-D point correspondences.
 ///
-/// Solves the PnP problem: given `N ≥ 6` 3-D *object points* and their 2-D
-/// *image projections*, together with the camera *intrinsic matrix*, computes
-/// the rotation vector `rvec` and translation vector `tvec` that describe
-/// the object's pose in the camera coordinate system.
+/// Solves the PnP problem: given `N ≥ 6` 3-D *object points* (`N ≥ 3` when an
+/// extrinsic guess is supplied) and their 2-D *image projections*, together
+/// with the camera *intrinsic matrix*, computes the rotation vector `rvec` and
+/// translation vector `tvec` that describe the object's pose in the camera
+/// coordinate system.
 ///
 /// Follows the OpenCV `cv::solvePnP` convention:
 /// ```text
@@ -94,7 +95,8 @@ pub enum SolvePnPMethod {
 ///
 /// # Arguments
 ///
-/// * `object_points` – World-space 3-D points (at least 6).
+/// * `object_points` – World-space 3-D points (at least 6, or at least 3 with
+///   `use_extrinsic_guess`).
 /// * `image_points`  – Corresponding 2-D image points.
 /// * `camera_matrix` – 3×3 intrinsic matrix `K = [[fx,0,cx],[0,fy,cy],[0,0,1]]`.
 /// * `dist_coeffs`   – Distortion coefficients `[k1,k2,p1,p2[,k3…]]` or `None`.
@@ -102,8 +104,10 @@ pub enum SolvePnPMethod {
 ///   rewritten as 3×1.
 /// * `tvec`          – Translation vector (3×1 or 1×3 `f64`); output is always
 ///   rewritten as 3×1.
-/// * `use_extrinsic_guess` – When `true`, the contents of `rvec`/`tvec` are
-///   used as an initial estimate (only effective for `Iterative`).
+/// * `use_extrinsic_guess` – When `true`, the contents of `rvec`/`tvec` seed
+///   the refinement directly and DLT initialisation is skipped (only effective
+///   for `Iterative`). The refinement is local: a poor guess can converge to a
+///   poor solution instead of reporting an error, as in OpenCV.
 /// * `flags`         – Algorithm selection (see [`SolvePnPMethod`]).
 ///
 /// # Returns
@@ -112,9 +116,10 @@ pub enum SolvePnPMethod {
 ///
 /// # Errors
 ///
-/// Returns [`PureCvError::InvalidInput`] when fewer than 6 correspondences are
-/// given, the camera matrix is singular, or `use_extrinsic_guess` is set while
-/// `rvec`/`tvec` are not 3×1 or 1×3 vectors with finite values.
+/// Returns [`PureCvError::InvalidInput`] when there are fewer than 6
+/// correspondences (fewer than 3 with `use_extrinsic_guess`), the camera matrix
+/// is singular, or `use_extrinsic_guess` is set while `rvec`/`tvec` are not 3×1
+/// or 1×3 vectors with finite values.
 ///
 /// # Divergences from OpenCV
 ///
@@ -122,7 +127,7 @@ pub enum SolvePnPMethod {
 /// |--------|--------|
 /// | Accepts `Mat` (many layouts) | Accepts `&[Point3f]` / `&[Point2f]` |
 /// | Supports distortion undistortion | Only pin-hole (no distortion correction) |
-/// | Allows ≥4 points (≥3 with guess for `Iterative`) | Requires ≥6 points (DLT initialisation) |
+/// | Allows ≥4 points (≥3 with guess for `Iterative`) | Requires ≥6 points without a guess (DLT initialisation), ≥3 with one |
 /// | Iterative refinement via Levenberg-Marquardt | Gauss-Newton refinement |
 /// | Returns `bool` | Returns `Result<bool>` |
 #[allow(clippy::too_many_arguments)]
@@ -144,10 +149,12 @@ pub fn solve_pnp(
             image_points.len()
         )));
     }
-    if n < 6 {
-        return Err(PureCvError::InvalidInput(
-            "solve_pnp requires at least 6 point correspondences for DLT".to_string(),
-        ));
+    // DLT needs 6 correspondences; with a guess no DLT runs, so 3 suffice.
+    if n < 6 && !(use_extrinsic_guess && n >= 3) {
+        return Err(PureCvError::InvalidInput(format!(
+            "solve_pnp requires at least 6 point correspondences for DLT initialisation, \
+             or at least 3 with use_extrinsic_guess (got {n})"
+        )));
     }
     if flags != SolvePnPMethod::Iterative {
         return Err(PureCvError::NotImplemented(
@@ -262,10 +269,12 @@ pub fn solve_pnp_ransac(
             image_points.len()
         )));
     }
+    // Keep the minimum at 6: `sample_no_replace` below cannot draw 6 distinct
+    // indices from fewer points and would spin forever.
     if n < 6 {
-        return Err(PureCvError::InvalidInput(
-            "solve_pnp_ransac requires at least 6 point correspondences".to_string(),
-        ));
+        return Err(PureCvError::InvalidInput(format!(
+            "solve_pnp_ransac requires at least 6 point correspondences (got {n})"
+        )));
     }
     if flags != SolvePnPMethod::Iterative {
         return Err(PureCvError::NotImplemented(
@@ -273,12 +282,9 @@ pub fn solve_pnp_ransac(
         ));
     }
 
-    // OpenCV ignores the extrinsic guess when building each RANSAC hypothesis
-    // and uses it only for the final all-inlier refit. Hypotheses run EPnP on
-    // 5 points (`solvepnp.cpp` L213-L224), and `solvePnPGeneric` disables the
-    // guess for every method other than ITERATIVE (L791-L792), so each
-    // hypothesis ignores it. The guess survives in `rvec`/`tvec` (L209-L210)
-    // and seeds the final ITERATIVE refit (L295-L303).
+    // OpenCV seeds only the final all-inlier refit with the guess, never the
+    // hypotheses (see the doc comment).
+    // Ref: https://github.com/opencv/opencv/blob/4.10.0/modules/calib3d/src/solvepnp.cpp#L325-L332
     let guess = if use_extrinsic_guess {
         Some(read_guess(rvec, tvec)?)
     } else {
@@ -315,8 +321,7 @@ pub fn solve_pnp_ransac(
         let s_obj: Vec<Point3f> = idx.iter().map(|&i| object_points[i]).collect();
         let s_img: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
 
-        // Minimal-set hypotheses ignore the extrinsic guess (see above):
-        // always initialise from DLT, then refine.
+        // Minimal-set hypotheses ignore the guess: DLT, then refine.
         let (r, t) = match dlt_pnp(&s_img, &s_obj) {
             Ok((r, t)) => {
                 let rv = rmat_to_rvec(&r);
@@ -390,9 +395,10 @@ pub fn solve_pnp_ransac(
 // ---------------------------------------------------------------------------
 // DLT initialisation
 // ---------------------------------------------------------------------------
-// TODO: EPnP/LM for parity — hypotheses currently use DLT on 6 points and
-// Gauss-Newton refinement, while OpenCV uses EPnP on 5 points and
-// Levenberg-Marquardt (`findExtrinsicCameraParams2`).
+// TODO: EPnP/LM for parity — hypotheses use DLT on 6 points + Gauss-Newton;
+// OpenCV uses EPnP on 5 points + Levenberg-Marquardt, and initialises from a
+// homography for planar object points instead of DLT (no guess case).
+// Ref: https://github.com/opencv/opencv/blob/4.10.0/modules/calib3d/src/calibration.cpp#L1152
 
 /// DLT solution for the PnP problem using normalised image coordinates.
 ///
@@ -501,8 +507,9 @@ fn reproject_sign(r: &[f64; 9], t: &[f64; 3], pts: &[Point3f]) -> i32 {
 // Gauss-Newton refinement
 // ---------------------------------------------------------------------------
 
-/// Refine pose `(rv, t)` by minimizing the sum of squared reprojection errors
-/// in normalised image coordinates using the Gauss-Newton method.
+/// Refine `(rv_init, t_init)` by minimising the squared reprojection error in
+/// normalised image coordinates (Gauss-Newton). Returns `(R, t)` with `R` as a
+/// rotation *matrix*, not a vector.
 fn gauss_newton_refine_rvec(
     norm_pts: &[Point2f],
     obj_pts: &[Point3f],
@@ -828,7 +835,7 @@ fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<PoseGuess> {
     Ok(PoseGuess { rv, t })
 }
 
-/// Write rotation + translation to output matrices.
+/// Write the pose `(R, t)`, converting `R` to Rodrigues form (both 3×1).
 fn write_output(r: [f64; 9], t: [f64; 3], rvec: &mut Matrix<f64>, tvec: &mut Matrix<f64>) {
     let rv = rmat_to_rvec(&r);
     rvec.rows = 3;
