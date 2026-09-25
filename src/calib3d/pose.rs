@@ -390,6 +390,9 @@ pub fn solve_pnp_ransac(
 // ---------------------------------------------------------------------------
 // DLT initialisation
 // ---------------------------------------------------------------------------
+// TODO: EPnP/LM for parity — hypotheses currently use DLT on 6 points and
+// Gauss-Newton refinement, while OpenCV uses EPnP on 5 points and
+// Levenberg-Marquardt (`findExtrinsicCameraParams2`).
 
 /// DLT solution for the PnP problem using normalised image coordinates.
 ///
