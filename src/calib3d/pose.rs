@@ -48,9 +48,10 @@ use crate::core::error::{PureCvError, Result};
 use crate::core::logging::tags;
 use crate::core::types::{Point2f, Point3f};
 use crate::core::Matrix;
-use crate::cv_log_warning;
+use crate::{cv_log_debug, cv_log_warning};
 
 use super::geometry::rvec_to_rmat;
+use super::levmarq::{Callback, LevMarq, Settings as LevMarqSettings};
 use super::linalg::{mat3_inv, mat3_mul, nearest_rotation, null_space_vector, Lcg};
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ use super::linalg::{mat3_inv, mat3_mul, nearest_rotation, null_space_vector, Lcg
 #[repr(i32)]
 pub enum SolvePnPMethod {
     /// Iterative method based on DLT initialisation followed by
-    /// Gauss-Newton reprojection-error minimisation.
+    /// Levenberg-Marquardt reprojection-error minimisation.
     Iterative = 0,
     /// P3P (Gao et al. 2003).  Requires exactly 4 point pairs.
     P3P = 2,
@@ -119,6 +120,7 @@ pub enum SolvePnPMethod {
 /// |--------|--------|
 /// | Accepts `Mat` (many layouts) | Accepts `&[Point3f]` / `&[Point2f]` |
 /// | Supports distortion undistortion | Only pin-hole (no distortion correction) |
+/// | Levenberg-Marquardt with geodesic acceleration | [`LevMarq`](super::levmarq::LevMarq) without geodesic acceleration |
 /// | Returns `bool` | Returns `Result<bool>` |
 #[allow(clippy::too_many_arguments)]
 pub fn solve_pnp(
@@ -171,7 +173,7 @@ pub fn solve_pnp(
     // DLT initial estimate.
     let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
 
-    // Gauss-Newton refinement.
+    // Levenberg-Marquardt refinement.
     let (r_ref, t_ref) = if use_extrinsic_guess
         && rvec.rows == 3
         && rvec.cols == 1
@@ -179,11 +181,11 @@ pub fn solve_pnp(
         && tvec.cols == 1
     {
         let rv = [rvec.data[0], rvec.data[1], rvec.data[2]];
-        let r_guess = rvec_to_rmat(rv[0], rv[1], rv[2]);
         let t_guess = [tvec.data[0], tvec.data[1], tvec.data[2]];
-        gauss_newton_refine(&norm_pts, object_points, &r_guess, &t_guess)
+        refine_pose_rvec(&norm_pts, object_points, &rv, &t_guess)
     } else {
-        gauss_newton_refine(&norm_pts, object_points, &r_init, &t_init)
+        let rv_init = rmat_to_rvec_approx(&r_init);
+        refine_pose_rvec(&norm_pts, object_points, &rv_init, &t_init)
     };
 
     // Convert rotation matrix → rotation vector.
@@ -299,7 +301,8 @@ pub fn solve_pnp_ransac(
             Ok(rt) => rt,
             Err(_) => continue,
         };
-        let (r, t) = gauss_newton_refine(&s_img, &s_obj, &r, &t);
+        let rv = rmat_to_rvec_approx(&r);
+        let (r, t) = refine_pose_rvec(&s_img, &s_obj, &rv, &t);
 
         // Count inliers using reprojection error in *normalized* coordinates.
         let (count, mask) = count_pnp_inliers(&norm_pts, object_points, &r, &t, thr2);
@@ -339,7 +342,10 @@ pub fn solve_pnp_ransac(
         .collect();
 
     let (r_final, t_final) = match dlt_pnp(&in_img, &in_obj) {
-        Ok(rt) => gauss_newton_refine(&in_img, &in_obj, &rt.0, &rt.1),
+        Ok((r, t)) => {
+            let rv = rmat_to_rvec_approx(&r);
+            refine_pose_rvec(&in_img, &in_obj, &rv, &t)
+        }
         Err(_) => (best_r, best_t),
     };
 
@@ -465,51 +471,102 @@ fn reproject_sign(r: &[f64; 9], t: &[f64; 3], pts: &[Point3f]) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Gauss-Newton refinement
+// Levenberg-Marquardt refinement
 // ---------------------------------------------------------------------------
 
-/// Refine pose `(R, t)` by minimizing the sum of squared reprojection errors
-/// in normalised image coordinates using the Gauss-Newton method.
-fn gauss_newton_refine(
-    norm_pts: &[Point2f],
-    obj_pts: &[Point3f],
-    r_init: &[f64; 9],
-    t_init: &[f64; 3],
-) -> ([f64; 9], [f64; 3]) {
-    // We parameterise the rotation as a Rodriguez vector.
-    let mut rv = rmat_to_rvec_approx(r_init);
-    let mut t = *t_init;
-
-    const MAX_ITER: usize = 20;
-    const EPS: f64 = 1e-8;
-
-    for _ in 0..MAX_ITER {
-        let r = rvec_to_rmat(rv[0], rv[1], rv[2]);
-        let (jtj, jtb, err2) = build_jtj(&r, &rv, &t, norm_pts, obj_pts);
-
-        if err2 < EPS * EPS {
-            break;
-        }
-
-        // Solve the 6×6 normal equations ∂(J^T J) δ = J^T b.
-        let delta = solve_6x6(&jtj, &jtb);
-        if delta.iter().map(|v| v * v).sum::<f64>().sqrt() < EPS {
-            break;
-        }
-
-        rv[0] += delta[0];
-        rv[1] += delta[1];
-        rv[2] += delta[2];
-        t[0] += delta[3];
-        t[1] += delta[4];
-        t[2] += delta[5];
+/// PnP refinement settings. OpenCV's `findExtrinsicCameraParams2` runs its LM
+/// solver for at most 20 probe iterations here, with the default `λ` policy
+/// and tolerances.
+fn pnp_refine_settings() -> LevMarqSettings {
+    LevMarqSettings {
+        max_iterations: 20,
+        ..LevMarqSettings::default()
     }
-
-    let r_final = rvec_to_rmat(rv[0], rv[1], rv[2]);
-    (r_final, t)
 }
 
-/// Build J^T J and J^T r for the reprojection-error Gauss-Newton system
+/// Reprojection-error objective minimised by [`refine_pose_rvec`], in
+/// normalised image coordinates.
+///
+/// Terms with `|z| < 1e-12` are skipped, exactly as in [`build_jtj`], so
+/// [`Callback::energy`] and [`Callback::compute`] report the same objective.
+struct ReprojectionCallback<'a> {
+    norm_pts: &'a [Point2f],
+    obj_pts: &'a [Point3f],
+}
+
+impl Callback for ReprojectionCallback<'_> {
+    fn energy(&mut self, param: &[f64]) -> Option<f64> {
+        let r = rvec_to_rmat(param[0], param[1], param[2]);
+        let t = [param[3], param[4], param[5]];
+        let mut total = 0.0;
+        for i in 0..self.norm_pts.len() {
+            let xx = self.obj_pts[i].x as f64;
+            let yy = self.obj_pts[i].y as f64;
+            let zz = self.obj_pts[i].z as f64;
+
+            let cz = r[6] * xx + r[7] * yy + r[8] * zz + t[2];
+            if cz.abs() < 1e-12 {
+                continue;
+            }
+            let inv_cz = 1.0 / cz;
+            let eu =
+                (r[0] * xx + r[1] * yy + r[2] * zz + t[0]) * inv_cz - self.norm_pts[i].x as f64;
+            let ev =
+                (r[3] * xx + r[4] * yy + r[5] * zz + t[1]) * inv_cz - self.norm_pts[i].y as f64;
+            total += eu * eu + ev * ev;
+        }
+        Some(total)
+    }
+
+    fn compute(&mut self, param: &[f64], jtj: &mut [f64], jtb: &mut [f64]) -> Option<f64> {
+        let rv = [param[0], param[1], param[2]];
+        let t = [param[3], param[4], param[5]];
+        let r = rvec_to_rmat(rv[0], rv[1], rv[2]);
+        let (j, b, energy) = build_jtj(&r, &rv, &t, self.norm_pts, self.obj_pts);
+        jtj.copy_from_slice(&j);
+        jtb.copy_from_slice(&b);
+        Some(energy)
+    }
+}
+
+/// Refine a pose seeded by the rotation vector `rv_init` and the translation
+/// `t_init`, minimising the sum of squared reprojection errors in normalised
+/// image coordinates with Levenberg-Marquardt.
+///
+/// Returns the refined pose as `(R, t)`, where `R` is a rotation *matrix* (not
+/// a rotation vector) in row-major order.
+///
+/// Exposed to `super` so the module tests can drive the refinement with seeds
+/// that the public API cannot express (see `mat3_mul_pub` for the same
+/// pattern).
+pub(super) fn refine_pose_rvec(
+    norm_pts: &[Point2f],
+    obj_pts: &[Point3f],
+    rv_init: &[f64; 3],
+    t_init: &[f64; 3],
+) -> ([f64; 9], [f64; 3]) {
+    let mut param = [
+        rv_init[0], rv_init[1], rv_init[2], t_init[0], t_init[1], t_init[2],
+    ];
+    let mut callback = ReprojectionCallback { norm_pts, obj_pts };
+    let mut solver = LevMarq::new(6, pnp_refine_settings());
+    let report = solver.optimize(&mut param, &mut callback);
+    if !report.found {
+        // Not fatal: as in OpenCV, the best point reached is returned either
+        // way, and callers of PnP only see `Ok(true)`.
+        cv_log_debug!(
+            tags::CALIB3D,
+            "solve_pnp: LM refinement stopped without converging ({report:?})"
+        );
+    }
+
+    (
+        rvec_to_rmat(param[0], param[1], param[2]),
+        [param[3], param[4], param[5]],
+    )
+}
+
+/// Build J^T J and J^T r for the reprojection-error least-squares problem
 /// (6-parameter: 3 Rodrigues + 3 translation).
 fn build_jtj(
     r: &[f64; 9],
@@ -591,68 +648,6 @@ fn build_jtj(
     }
 
     (jtj, jtb, total_err2)
-}
-
-/// Solve 6×6 symmetric positive-(semi-)definite system via Cholesky decomposition.
-fn solve_6x6(a: &[f64; 36], b: &[f64; 6]) -> [f64; 6] {
-    // Simple Gaussian elimination with partial pivoting.
-    const N: usize = 6;
-    let mut m = [0.0f64; N * N];
-    let mut rhs = [0.0f64; N];
-    for i in 0..N {
-        for j in 0..N {
-            m[i * N + j] = a[i * N + j];
-        }
-        rhs[i] = -b[i]; // We want to minimise: ½‖Jδ − r‖², so δ = −(J^TJ)^{-1} J^Tr.
-    }
-
-    let mut perm: [usize; N] = [0, 1, 2, 3, 4, 5];
-    for col in 0..N {
-        // Find pivot.
-        let mut max_val = m[col * N + col].abs();
-        let mut max_row = col;
-        for row in (col + 1)..N {
-            let v = m[row * N + col].abs();
-            if v > max_val {
-                max_val = v;
-                max_row = row;
-            }
-        }
-        if max_val < 1e-14 {
-            continue; // Degenerate; skip.
-        }
-        if max_row != col {
-            for j in 0..N {
-                m.swap(col * N + j, max_row * N + j);
-            }
-            rhs.swap(col, max_row);
-            perm.swap(col, max_row);
-        }
-        let pivot = m[col * N + col];
-        for row in (col + 1)..N {
-            let factor = m[row * N + col] / pivot;
-            for j in col..N {
-                let v = m[col * N + j];
-                m[row * N + j] -= factor * v;
-            }
-            rhs[row] -= factor * rhs[col];
-        }
-    }
-
-    // Back substitution.
-    let mut x = [0.0f64; N];
-    for i in (0..N).rev() {
-        let mut s = rhs[i];
-        for j in (i + 1)..N {
-            s -= m[i * N + j] * x[j];
-        }
-        x[i] = if m[i * N + i].abs() > 1e-14 {
-            s / m[i * N + i]
-        } else {
-            0.0
-        };
-    }
-    x
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +750,7 @@ fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Result<Vec<Point2
         .collect())
 }
 
-/// Convert rotation matrix → Rodrigues vector for use as a Gauss-Newton
+/// Convert rotation matrix → Rodrigues vector for use as a refinement
 /// initialiser.  Returns the same result as `geometry::rmat_to_rvec`, but
 /// inlined here to avoid a cross-module call in the hot refinement loop.
 fn rmat_to_rvec_approx(r: &[f64; 9]) -> [f64; 3] {

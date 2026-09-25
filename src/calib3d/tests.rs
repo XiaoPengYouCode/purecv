@@ -86,6 +86,183 @@ mod calib3d_tests {
     }
 
     // -----------------------------------------------------------------------
+    // Levenberg-Marquardt solver
+    // -----------------------------------------------------------------------
+
+    /// Residual-based objective for the `LevMarq` tests, with a
+    /// central-difference Jacobian so each test only states its residuals.
+    struct ResidualObjective<F: Fn(&[f64], &mut [f64])> {
+        f: F,
+        nvars: usize,
+        nerrs: usize,
+        jac: Vec<f64>,
+    }
+
+    impl<F: Fn(&[f64], &mut [f64])> ResidualObjective<F> {
+        fn new(nvars: usize, nerrs: usize, f: F) -> Self {
+            Self {
+                f,
+                nvars,
+                nerrs,
+                jac: vec![0.0; nvars * nerrs],
+            }
+        }
+    }
+
+    impl<F: Fn(&[f64], &mut [f64])> crate::calib3d::levmarq::Callback for ResidualObjective<F> {
+        fn energy(&mut self, param: &[f64]) -> Option<f64> {
+            let mut res = vec![0.0; self.nerrs];
+            (self.f)(param, &mut res);
+            Some(res.iter().map(|r| r * r).sum())
+        }
+
+        fn compute(&mut self, param: &[f64], jtj: &mut [f64], jtb: &mut [f64]) -> Option<f64> {
+            const H: f64 = 1e-6;
+            let (n, m) = (self.nvars, self.nerrs);
+
+            let mut res = vec![0.0; m];
+            (self.f)(param, &mut res);
+            let energy = res.iter().map(|r| r * r).sum();
+
+            let mut p = param.to_vec();
+            for j in 0..n {
+                let orig = p[j];
+                p[j] = orig + H;
+                let mut rp = vec![0.0; m];
+                (self.f)(&p, &mut rp);
+                p[j] = orig - H;
+                let mut rm = vec![0.0; m];
+                (self.f)(&p, &mut rm);
+                p[j] = orig;
+                for i in 0..m {
+                    self.jac[i * n + j] = (rp[i] - rm[i]) / (2.0 * H);
+                }
+            }
+
+            for a in 0..n {
+                jtb[a] = 0.0;
+                for i in 0..m {
+                    jtb[a] += self.jac[i * n + a] * res[i];
+                }
+                for b in 0..n {
+                    let mut s = 0.0;
+                    for i in 0..m {
+                        s += self.jac[i * n + a] * self.jac[i * n + b];
+                    }
+                    jtj[a * n + b] = s;
+                }
+            }
+            Some(energy)
+        }
+    }
+
+    #[test]
+    fn test_levmarq_quadratic() {
+        use crate::calib3d::levmarq::{LevMarq, Settings};
+
+        // Overdetermined (inconsistent) system: r(x) = [x₀ - 3, x₁ + 1, x₀ + x₁].
+        // The normal equations 2x₀ + x₁ = 3 and x₀ + 2x₁ = -1 give the analytic
+        // least-squares optimum x = (7/3, -5/3) with energy 4/3.
+        let mut obj = ResidualObjective::new(2, 3, |p, r| {
+            r[0] = p[0] - 3.0;
+            r[1] = p[1] + 1.0;
+            r[2] = p[0] + p[1];
+        });
+        let mut solver = LevMarq::new(2, Settings::default());
+        let mut param = [0.0f64, 0.0];
+        let report = solver.optimize(&mut param, &mut obj);
+
+        assert!(report.found, "{report:?}");
+        assert!(approx_eq(report.energy, 4.0 / 3.0, 1e-10), "{report:?}");
+        // The solver stops once the step norm / relative energy change drop
+        // below 1e-6, so the parameters are only accurate to about that
+        // (the finite-difference Jacobian of this test helper adds a little).
+        assert!(approx_eq(param[0], 7.0 / 3.0, 1e-6), "{param:?}");
+        assert!(approx_eq(param[1], -5.0 / 3.0, 1e-6), "{param:?}");
+    }
+
+    #[test]
+    fn test_levmarq_far_start() {
+        use crate::calib3d::levmarq::{LevMarq, Settings};
+
+        // Damping must matter here: undamped Gauss-Newton on
+        // r(x) = atan(x) - 1 diverges from x₀ = 10 (steps grow instead of
+        // shrinking), while LM converges to the root x = tan(1).
+        let mut obj = ResidualObjective::new(1, 1, |p, r| {
+            r[0] = p[0].atan() - 1.0;
+        });
+        let mut solver = LevMarq::new(1, Settings::default());
+        let mut param = [10.0f64];
+        let report = solver.optimize(&mut param, &mut obj);
+
+        assert!(report.found, "{report:?}");
+        assert!(param[0].is_finite(), "{param:?}");
+        assert!(approx_eq(param[0], 1.0f64.tan(), 1e-4), "{param:?}");
+    }
+
+    #[test]
+    fn test_levmarq_rosenbrock() {
+        use crate::calib3d::levmarq::{LevMarq, Settings};
+
+        // Classic hard start for the banana function, which has its minimum at
+        // (1, 1) with zero residuals.
+        let mut obj = ResidualObjective::new(2, 2, |p, r| {
+            r[0] = 1.0 - p[0];
+            r[1] = 10.0 * (p[1] - p[0] * p[0]);
+        });
+        let mut solver = LevMarq::new(2, Settings::default());
+        let mut param = [-1.2f64, 1.0];
+        let report = solver.optimize(&mut param, &mut obj);
+
+        assert!(report.found, "{report:?}");
+        assert!(approx_eq(param[0], 1.0, 1e-3), "{param:?}");
+        assert!(approx_eq(param[1], 1.0, 1e-3), "{param:?}");
+    }
+
+    #[test]
+    fn test_levmarq_iteration_exhaustion_is_not_success() {
+        use crate::calib3d::levmarq::{LevMarq, Report, Settings};
+
+        let mut obj = ResidualObjective::new(1, 1, |p, r| {
+            r[0] = p[0] - 1.0;
+        });
+        // A single probe cannot satisfy the tolerances from this start, so the
+        // solver must report the exhaustion rather than a converged result.
+        let settings = Settings {
+            max_iterations: 1,
+            ..Settings::default()
+        };
+        let mut solver = LevMarq::new(1, settings);
+        let mut param = [1e6f64];
+        let report = solver.optimize(&mut param, &mut obj);
+
+        assert_eq!(
+            report,
+            Report {
+                found: false,
+                iters: 1,
+                energy: report.energy
+            }
+        );
+        assert!(param[0].is_finite(), "{param:?}");
+    }
+
+    #[test]
+    fn test_levmarq_rejects_wrong_param_len() {
+        use crate::calib3d::levmarq::{LevMarq, Settings};
+
+        let mut obj = ResidualObjective::new(2, 1, |p, r| {
+            r[0] = p[0] - p[1];
+        });
+        let mut solver = LevMarq::new(2, Settings::default());
+        let mut param = [5.0f64];
+        let report = solver.optimize(&mut param, &mut obj);
+
+        assert!(!report.found, "{report:?}");
+        assert_eq!(param, [5.0], "the input must be left untouched");
+    }
+
+    // -----------------------------------------------------------------------
     // Rodrigues
     // -----------------------------------------------------------------------
 
@@ -407,6 +584,81 @@ mod calib3d_tests {
             "tz={} expected ~6",
             tvec.data[2]
         );
+    }
+
+    #[test]
+    fn test_solve_pnp_refinement_survives_hostile_seeds() {
+        // The public API seeds the refinement with DLT, but callers get to
+        // supply their own seed once #133 lands; this drives `refine_pose_rvec`
+        // directly with seeds the public API cannot express.
+        use crate::calib3d::geometry::rvec_to_rmat;
+        use crate::calib3d::pose::refine_pose_rvec;
+
+        let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+        let true_rv = [0.1f64, -0.05, 0.08];
+        let true_tv = [0.0f64, 0.0, 6.0];
+        let (obj, img) = make_pnp_data(true_rv, true_tv, &k);
+
+        // Normalised image points, as the refinement works in normalised coords.
+        let norm: Vec<Point2f> = img
+            .iter()
+            .map(|p| Point2f {
+                x: ((p.x as f64 - k[2]) / k[0]) as f32,
+                y: ((p.y as f64 - k[5]) / k[4]) as f32,
+            })
+            .collect();
+
+        // Energy of a pose under the same convention as the refinement
+        // (squared normalised reprojection error, degenerate terms skipped).
+        let energy = |r: &[f64; 9], t: &[f64; 3]| -> f64 {
+            let mut sum = 0.0;
+            for (p, q) in obj.iter().zip(norm.iter()) {
+                let cx = r[0] * p.x as f64 + r[1] * p.y as f64 + r[2] * p.z as f64 + t[0];
+                let cy = r[3] * p.x as f64 + r[4] * p.y as f64 + r[5] * p.z as f64 + t[1];
+                let cz = r[6] * p.x as f64 + r[7] * p.y as f64 + r[8] * p.z as f64 + t[2];
+                if cz.abs() < 1e-12 {
+                    continue;
+                }
+                let eu = cx / cz - q.x as f64;
+                let ev = cy / cz - q.y as f64;
+                sum += eu * eu + ev * ev;
+            }
+            sum
+        };
+
+        // A coarse but sane prior (the previous-frame pose case) must converge
+        // to the true pose.
+        let seed_rv = [0.6f64, -0.5, 0.5];
+        let seed_tv = [1.5f64, -1.2, 8.0];
+        let (r, t) = refine_pose_rvec(&norm, &obj, &seed_rv, &seed_tv);
+        let r_want = rvec_to_rmat(true_rv[0], true_rv[1], true_rv[2]);
+        for (got, want) in r.iter().zip(r_want.iter()) {
+            assert!(approx_eq(*got, *want, 1e-4), "rmat {r:?} from {seed_rv:?}");
+        }
+        for (got, want) in t.iter().zip(true_tv.iter()) {
+            assert!(approx_eq(*got, *want, 1e-4), "tvec {t:?} from {seed_tv:?}");
+        }
+
+        // Hostile seeds (half a turn away, or far off in translation) are not
+        // guaranteed to reach the global minimum - the cost surface has local
+        // minima - but damping keeps them bounded and monotonically no worse
+        // than the seed. Undamped Gauss-Newton used to answer the half-turn
+        // case with a translation of ~1e5 instead.
+        for (seed_rv, seed_tv) in [
+            ([0.0f64, 0.0, core::f64::consts::PI], [0.0f64, 0.0, 6.0]),
+            ([3.0f64, -2.5, 3.0], [50.0f64, -40.0, 0.5]),
+        ] {
+            let seed_r = rvec_to_rmat(seed_rv[0], seed_rv[1], seed_rv[2]);
+            let seed_energy = energy(&seed_r, &seed_tv);
+            let (r, t) = refine_pose_rvec(&norm, &obj, &seed_rv, &seed_tv);
+
+            assert!(t.iter().all(|v| v.is_finite()), "tvec {t:?}");
+            assert!(r.iter().all(|v| v.is_finite()), "rmat {r:?}");
+            assert!(
+                energy(&r, &t) <= seed_energy + 1e-12,
+                "error grew from {seed_energy} for seed ({seed_rv:?}, {seed_tv:?})"
+            );
+        }
     }
 
     #[test]

@@ -105,6 +105,65 @@ pub(super) fn mat3_inv(m: &[f64; 9]) -> Option<[f64; 9]> {
 }
 
 // ---------------------------------------------------------------------------
+// Dense linear solver
+// ---------------------------------------------------------------------------
+
+/// Solve the dense `n × n` system `a·x = b` in place by Gaussian elimination
+/// with partial pivoting.
+///
+/// `a` (row-major) and `b` are overwritten with the factorisation and the
+/// solution. Returns `false` when a pivot is (near-)zero, i.e. the system is
+/// singular or too ill-conditioned; `b` is then left in an undefined state.
+pub(super) fn solve_dense(n: usize, a: &mut [f64], b: &mut [f64]) -> bool {
+    const PIVOT_EPS: f64 = 1e-14;
+
+    for col in 0..n {
+        // Find the pivot.
+        let mut max_val = a[col * n + col].abs();
+        let mut max_row = col;
+        for row in (col + 1)..n {
+            let v = a[row * n + col].abs();
+            if v > max_val {
+                max_val = v;
+                max_row = row;
+            }
+        }
+        if max_val < PIVOT_EPS {
+            return false;
+        }
+        if max_row != col {
+            for j in 0..n {
+                a.swap(col * n + j, max_row * n + j);
+            }
+            b.swap(col, max_row);
+        }
+
+        // Eliminate below the pivot.
+        let pivot = a[col * n + col];
+        for row in (col + 1)..n {
+            let factor = a[row * n + col] / pivot;
+            if factor == 0.0 {
+                continue;
+            }
+            for j in col..n {
+                a[row * n + j] -= factor * a[col * n + j];
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+
+    // Back substitution; the solution overwrites `b`.
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        for j in (i + 1)..n {
+            s -= a[i * n + j] * b[j];
+        }
+        b[i] = s / a[i * n + i];
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
 // Jacobi symmetric eigenvalue decomposition
 // ---------------------------------------------------------------------------
 
