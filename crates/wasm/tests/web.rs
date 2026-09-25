@@ -2,8 +2,8 @@
 
 use purecv_wasm::{
     calc_back_project_uniform, calc_hist_uniform, compare_hist, equalize_hist,
-    find_homography_wasm, hist_cmp_correl, rodrigues_wasm, solve_pnp_wasm, Mat, MatVector,
-    Point2fVector, Point3fVector, WasmClahe,
+    find_homography_wasm, hist_cmp_correl, rodrigues_wasm, solve_pnp_wasm, undistort_points_wasm,
+    Mat, MatVector, Point2fVector, Point3fVector, WasmClahe,
 };
 use wasm_bindgen_test::*;
 
@@ -46,6 +46,89 @@ fn rvec_to_rmat(rx: f64, ry: f64, rz: f64) -> [f64; 9] {
         z * y * c1 + x * s,
         c + z * z * c1,
     ]
+}
+
+#[wasm_bindgen_test]
+fn test_solve_pnp_distorted() {
+    // Same scene as the Rust test `test_solve_pnp_distorted_matches_opencv`:
+    // the observations are `cv2.projectPoints` output with DIST_STRONG below.
+    let dist = [0.35, -0.12, 0.008, -0.005, 0.02, -0.01, 0.004, -0.002];
+    let k = [800.0, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+    let raw_obj = [
+        [-1.5, -1.5, 0.0],
+        [1.5, -1.5, 0.0],
+        [1.5, 1.5, 0.0],
+        [-1.5, 1.5, 0.0],
+        [0.0, 0.0, 1.2],
+        [-0.8, 0.4, 0.6],
+        [0.9, -0.6, 0.3],
+        [1.8, 1.8, -0.6],
+    ];
+    let raw_img = [
+        [149.66536, -25.996552],
+        [580.7298, 31.545307],
+        [505.04422, 416.3636],
+        [121.27191, 402.39334],
+        [320.27795, 188.99399],
+        [229.7896, 242.81163],
+        [461.39566, 145.85039],
+        [572.37115, 498.49213],
+    ];
+
+    let mut obj_points = Point3fVector::new();
+    let mut img_points = Point2fVector::new();
+    for (obj, img) in raw_obj.iter().zip(raw_img.iter()) {
+        obj_points.push(obj[0], obj[1], obj[2]);
+        img_points.push(img[0], img[1]);
+    }
+
+    let camera_matrix = Mat::from_f64_data(3, 3, 1, &k).unwrap();
+    let mut rvec = Mat::from_f64_data(3, 1, 1, &vec![0.0; 3]).unwrap();
+    let mut tvec = Mat::from_f64_data(3, 1, 1, &vec![0.0; 3]).unwrap();
+
+    solve_pnp_wasm(
+        &obj_points,
+        &img_points,
+        &camera_matrix,
+        Some(dist.to_vec()),
+        &mut rvec,
+        &mut tvec,
+        false,
+        0, // Iterative
+    )
+    .expect("solve_pnp_wasm failed");
+
+    // cv2.solvePnP on the same data.
+    let rvec_data = rvec.data_f64().unwrap();
+    let want_rvec = [0.249999875785759, -0.1799998978655187, 0.099999992008784];
+    for (got, want) in rvec_data.iter().zip(want_rvec.iter()) {
+        assert!((got - want).abs() < 1e-6, "rvec {got} != {want}");
+    }
+    let tvec_data = tvec.data_f64().unwrap();
+    let want_tvec = [0.19999996267788459, -0.15000004828160973, 6.000000110377367];
+    for (got, want) in tvec_data.iter().zip(want_tvec.iter()) {
+        assert!((got - want).abs() < 1e-6, "tvec {got} != {want}");
+    }
+}
+
+#[wasm_bindgen_test]
+fn test_undistort_points() {
+    let k = [800.0, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+    let camera_matrix = Mat::from_f64_data(3, 3, 1, &k).unwrap();
+
+    let mut pixels = Point2fVector::new();
+    pixels.push(320.0, 240.0);
+    pixels.push(640.0, 480.0);
+
+    let dist = vec![0.15, -0.05, 0.001, -0.002, 0.01, -0.02, 0.03, -0.004];
+    let ideal = undistort_points_wasm(&pixels, &camera_matrix, Some(dist), None, None).unwrap();
+    assert_eq!(ideal.length(), 4);
+
+    // cv2.undistortPoints on the same pixels.
+    let got = ideal.to_vec();
+    assert!(got[0].abs() < 1e-6 && got[1].abs() < 1e-6);
+    assert!((got[2] - 0.38704290986061096).abs() < 1e-6);
+    assert!((got[3] - 0.289717435836792).abs() < 1e-6);
 }
 
 #[wasm_bindgen_test]

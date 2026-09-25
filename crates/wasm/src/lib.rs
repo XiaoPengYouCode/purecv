@@ -2413,6 +2413,51 @@ pub fn init_undistort_rectify_map_wasm(
     Ok(obj.into())
 }
 
+/// Computes the ideal point coordinates from observed (distorted) pixels,
+/// mirroring `cv::undistortPoints` with its default termination criteria.
+///
+/// `dist_coeffs` may be omitted (or empty) for zero distortion; `r` and `p`
+/// are the optional rectification rotation and new camera matrix.  Returns the
+/// ideal points as a flat `Float32Array` of `[x0, y0, x1, y1, ...]`.
+#[wasm_bindgen(js_name = "undistortPoints")]
+pub fn undistort_points_wasm(
+    src: &Point2fVector,
+    camera_matrix: &Mat,
+    dist_coeffs: Option<Vec<f64>>,
+    r: Option<Mat>,
+    p: Option<Mat>,
+) -> Result<js_sys::Float32Array, JsError> {
+    use purecv::calib3d::undistort_points;
+    use purecv::core::types::{TermCriteria, TermType};
+
+    let cam_mat = require_f64(camera_matrix, "undistortPoints (camera_matrix)")?;
+    let r_mat = match &r {
+        Some(mat) => Some(require_f64(mat, "undistortPoints (R)")?),
+        None => None,
+    };
+    let p_mat = match &p {
+        Some(mat) => Some(require_f64(mat, "undistortPoints (P)")?),
+        None => None,
+    };
+
+    let ideal = undistort_points(
+        &src.inner,
+        cam_mat,
+        dist_coeffs.as_deref().unwrap_or(&[]),
+        r_mat,
+        p_mat,
+        TermCriteria::new(TermType::Count, 5, 0.01),
+    )
+    .map_err(|e| JsError::new(&format!("{e}")))?;
+
+    let mut flat = Vec::with_capacity(ideal.len() * 2);
+    for point in &ideal {
+        flat.push(point.x);
+        flat.push(point.y);
+    }
+    Ok(js_sys::Float32Array::from(flat.as_slice()))
+}
+
 #[wasm_bindgen(js_name = "findFundamentalMat")]
 pub fn find_fundamental_mat_wasm(
     points1: &Point2fVector,
