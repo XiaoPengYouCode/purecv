@@ -171,9 +171,7 @@ pub fn solve_pnp(
     let norm_pts = undistort_points(image_points, &k)?;
 
     let (r_ref, t_ref) = match &guess {
-        Some((rv_guess, t_guess)) => {
-            gauss_newton_refine_rvec(&norm_pts, object_points, rv_guess, t_guess)
-        }
+        Some(PoseGuess { rv, t }) => gauss_newton_refine_rvec(&norm_pts, object_points, rv, t),
         None => {
             let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
             let rv_init = rmat_to_rvec(&r_init);
@@ -347,7 +345,7 @@ pub fn solve_pnp_ransac(
         .collect();
 
     let (r_final, t_final) = match &guess {
-        Some((rv_guess, t_guess)) => gauss_newton_refine_rvec(&in_img, &in_obj, rv_guess, t_guess),
+        Some(PoseGuess { rv, t }) => gauss_newton_refine_rvec(&in_img, &in_obj, rv, t),
         None => match dlt_pnp(&in_img, &in_obj) {
             Ok((r, t)) => {
                 let rv = rmat_to_rvec(&r);
@@ -768,8 +766,18 @@ fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Result<Vec<Point2
         .collect())
 }
 
+/// Caller-supplied extrinsic prior: rotation *vector* plus translation.
+///
+/// Kept distinct from the `([f64; 9], [f64; 3])` rotation-*matrix* pose used
+/// elsewhere in this file so the two representations cannot be mixed up.
+#[derive(Debug, Clone, Copy)]
+struct PoseGuess {
+    rv: [f64; 3],
+    t: [f64; 3],
+}
+
 /// Read the user-supplied extrinsic guess from `rvec`/`tvec`.
-fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<([f64; 3], [f64; 3])> {
+fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<PoseGuess> {
     if rvec.rows != 3 || rvec.cols != 1 || rvec.data.len() != 3 {
         return Err(PureCvError::InvalidInput(
             "use_extrinsic_guess requires rvec to be a 3x1 matrix".to_string(),
@@ -787,7 +795,7 @@ fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<([f64; 3], [f64;
             "use_extrinsic_guess requires finite rvec/tvec values".to_string(),
         ));
     }
-    Ok((rv, t))
+    Ok(PoseGuess { rv, t })
 }
 
 /// Write rotation + translation to output matrices.
