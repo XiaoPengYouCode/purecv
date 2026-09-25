@@ -441,15 +441,15 @@ mod calib3d_tests {
         )
         .unwrap();
         assert!(ok);
-        assert!(
-            approx_eq(tvec.data[2], true_tv[2], 0.5),
-            "tz={} expected ~{}",
-            tvec.data[2],
-            true_tv[2]
-        );
+        for (got, want) in tvec.data.iter().zip(true_tv.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "tvec {tvec:?} expected ~{true_tv:?}"
+            );
+        }
         for (got, want) in rvec.data.iter().zip(true_rv.iter()) {
             assert!(
-                approx_eq(*got, *want, 0.1),
+                approx_eq(*got, *want, 1e-4),
                 "rvec {rvec:?} expected ~{true_rv:?}"
             );
         }
@@ -536,12 +536,25 @@ mod calib3d_tests {
         )
         .unwrap();
         assert!(ok);
-        assert!(
-            approx_eq(tvec.data[2], true_tv[2], 0.5),
-            "tz={} expected ~{}",
-            tvec.data[2],
-            true_tv[2]
-        );
+        for (got, want) in tvec.data.iter().zip(true_tv.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "tvec {tvec:?} expected ~{true_tv:?}"
+            );
+        }
+        // Near-pi rotation is the point of this test: the refined rvec must
+        // stay close to the seed instead of being corrupted by an unstable
+        // rmat->rvec round-trip. Compare via rotation matrices so the check
+        // is robust to equivalent angle-axis wrappings.
+        let r_got =
+            crate::calib3d::geometry::rvec_to_rmat(rvec.data[0], rvec.data[1], rvec.data[2]);
+        let r_want = crate::calib3d::geometry::rvec_to_rmat(true_rv[0], true_rv[1], true_rv[2]);
+        for (got, want) in r_got.iter().zip(r_want.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "rmat {r_got:?} expected ~{r_want:?}"
+            );
+        }
     }
 
     #[test]
@@ -596,12 +609,92 @@ mod calib3d_tests {
         )
         .unwrap();
         assert!(ok);
-        assert!(!inliers.is_empty());
-        assert!(
-            approx_eq(tvec.data[2], true_tv[2], 1.0),
-            "tz={} expected ~6",
-            tvec.data[2]
-        );
+        // Planted outliers must be rejected; the remaining 17 points are inliers.
+        for &outlier in &[3, 11, 17] {
+            assert!(
+                !inliers.contains(&outlier),
+                "outlier {outlier} must not be in inliers {inliers:?}"
+            );
+        }
+        assert_eq!(inliers.len(), 17, "inliers={inliers:?}");
+        for (got, want) in tvec.data.iter().zip(true_tv.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "tvec {tvec:?} expected ~{true_tv:?}"
+            );
+        }
+        for (got, want) in rvec.data.iter().zip(true_rv.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "rvec {rvec:?} expected ~{true_rv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_solve_pnp_ransac_with_poor_extrinsic_guess() {
+        // Hypotheses must ignore the guess (OpenCV parity): even a deliberately
+        // poor prior must still yield the correct inlier set, with the guess
+        // seeding only the final all-inlier refit.
+        use crate::calib3d::geometry::rvec_to_rmat;
+        let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+        let true_rv = [0.1f64, -0.05, 0.08];
+        let true_tv = [0.0f64, 0.0, 6.0];
+        let cam = make_camera_matrix();
+        let r = rvec_to_rmat(true_rv[0], true_rv[1], true_rv[2]);
+        let mut obj = Vec::new();
+        for i in 0..20 {
+            let fi = i as f32;
+            obj.push(Point3f {
+                x: (fi % 5.0) - 2.0,
+                y: ((fi / 5.0).floor()) - 1.5,
+                z: (i % 3) as f32 * 0.4,
+            });
+        }
+        let mut img: Vec<Point2f> = obj
+            .iter()
+            .map(|p| {
+                let cx = r[0] * p.x as f64 + r[1] * p.y as f64 + r[2] * p.z as f64 + true_tv[0];
+                let cy = r[3] * p.x as f64 + r[4] * p.y as f64 + r[5] * p.z as f64 + true_tv[1];
+                let cz = r[6] * p.x as f64 + r[7] * p.y as f64 + r[8] * p.z as f64 + true_tv[2];
+                Point2f {
+                    x: (k[0] * cx / cz + k[2]) as f32,
+                    y: (k[4] * cy / cz + k[5]) as f32,
+                }
+            })
+            .collect();
+        img[3] = Point2f { x: 10.0, y: 10.0 };
+        img[11] = Point2f { x: 630.0, y: 470.0 };
+        img[17] = Point2f { x: 5.0, y: 475.0 };
+
+        // Poor prior: several tenths of a radian off in rotation, clearly off
+        // in translation.
+        let mut rvec = Matrix::from_vec(3, 1, 1, vec![0.5, -0.35, 0.43]);
+        let mut tvec = Matrix::from_vec(3, 1, 1, vec![1.5, -1.2, 8.0]);
+        let mut inliers = Vec::new();
+        let ok = solve_pnp_ransac(
+            &obj,
+            &img,
+            &cam,
+            None,
+            &mut rvec,
+            &mut tvec,
+            true,
+            100,
+            2.0,
+            0.99,
+            Some(&mut inliers),
+            SolvePnPMethod::Iterative,
+        )
+        .unwrap();
+        assert!(ok);
+        for &outlier in &[3, 11, 17] {
+            assert!(
+                !inliers.contains(&outlier),
+                "outlier {outlier} must not be in inliers {inliers:?}"
+            );
+        }
+        assert_eq!(inliers.len(), 17, "inliers={inliers:?}");
     }
 
     #[test]

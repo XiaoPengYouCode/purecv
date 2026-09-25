@@ -204,7 +204,9 @@ pub fn solve_pnp(
 /// * `dist_coeffs`          – Distortion coefficients or `None`.
 /// * `rvec`                 – Output rotation vector (3×1 `f64`).
 /// * `tvec`                 – Output translation vector (3×1 `f64`).
-/// * `use_extrinsic_guess`  – Use `rvec`/`tvec` as initial estimate.
+/// * `use_extrinsic_guess`  – When `true`, the caller-supplied `rvec`/`tvec`
+///   seed only the final all-inlier refit (matches OpenCV `solvePnPRansac`:
+///   minimal-set hypotheses are built from scratch and ignore the guess).
 /// * `iterations_count`     – Number of RANSAC iterations (default: 100).
 /// * `reproj_threshold`     – Maximum reprojection error for an inlier (pixels).
 /// * `confidence`           – Desired solution confidence (currently unused;
@@ -255,9 +257,12 @@ pub fn solve_pnp_ransac(
         ));
     }
 
-    // OpenCV threads the extrinsic guess into every minimal-set hypothesis
-    // (`PnPRansacCallback::runKernel` re-runs `solvePnP` with
-    // `useExtrinsicGuess` per minimal set).
+    // OpenCV ignores the extrinsic guess when building each RANSAC hypothesis
+    // and uses it only for the final all-inlier refit. Hypotheses run EPnP on
+    // 5 points (`solvepnp.cpp` L213-L224), and `solvePnPGeneric` disables the
+    // guess for every method other than ITERATIVE (L791-L792), so each
+    // hypothesis ignores it. The guess survives in `rvec`/`tvec` (L209-L210)
+    // and seeds the final ITERATIVE refit (L295-L303).
     let guess = if use_extrinsic_guess {
         Some(read_guess(rvec, tvec)?)
     } else {
@@ -294,17 +299,14 @@ pub fn solve_pnp_ransac(
         let s_obj: Vec<Point3f> = idx.iter().map(|&i| object_points[i]).collect();
         let s_img: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
 
-        let (r, t) = match &guess {
-            Some((rv_guess, t_guess)) => {
-                gauss_newton_refine_rvec(&s_img, &s_obj, rv_guess, t_guess)
+        // Minimal-set hypotheses ignore the extrinsic guess (see above):
+        // always initialise from DLT, then refine.
+        let (r, t) = match dlt_pnp(&s_img, &s_obj) {
+            Ok((r, t)) => {
+                let rv = rmat_to_rvec(&r);
+                gauss_newton_refine_rvec(&s_img, &s_obj, &rv, &t)
             }
-            None => match dlt_pnp(&s_img, &s_obj) {
-                Ok((r, t)) => {
-                    let rv = rmat_to_rvec(&r);
-                    gauss_newton_refine_rvec(&s_img, &s_obj, &rv, &t)
-                }
-                Err(_) => continue,
-            },
+            Err(_) => continue,
         };
 
         // Count inliers using reprojection error in *normalized* coordinates.
