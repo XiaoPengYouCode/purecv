@@ -82,7 +82,7 @@ pub enum SolvePnPMethod {
 
 /// Finds the object pose from 3-D / 2-D point correspondences.
 ///
-/// Solves the PnP problem: given `N ≥ 4` 3-D *object points* and their 2-D
+/// Solves the PnP problem: given `N ≥ 6` 3-D *object points* and their 2-D
 /// *image projections*, together with the camera *intrinsic matrix*, computes
 /// the rotation vector `rvec` and translation vector `tvec` that describe
 /// the object's pose in the camera coordinate system.
@@ -94,12 +94,14 @@ pub enum SolvePnPMethod {
 ///
 /// # Arguments
 ///
-/// * `object_points` – World-space 3-D points (at least 4).
+/// * `object_points` – World-space 3-D points (at least 6).
 /// * `image_points`  – Corresponding 2-D image points.
 /// * `camera_matrix` – 3×3 intrinsic matrix `K = [[fx,0,cx],[0,fy,cy],[0,0,1]]`.
 /// * `dist_coeffs`   – Distortion coefficients `[k1,k2,p1,p2[,k3…]]` or `None`.
-/// * `rvec`          – Output rotation vector (3×1 `f64`).
-/// * `tvec`          – Output translation vector (3×1 `f64`).
+/// * `rvec`          – Rotation vector (3×1 or 1×3 `f64`); output is always
+///   rewritten as 3×1.
+/// * `tvec`          – Translation vector (3×1 or 1×3 `f64`); output is always
+///   rewritten as 3×1.
 /// * `use_extrinsic_guess` – When `true`, the contents of `rvec`/`tvec` are
 ///   used as an initial estimate (only effective for `Iterative`).
 /// * `flags`         – Algorithm selection (see [`SolvePnPMethod`]).
@@ -110,9 +112,9 @@ pub enum SolvePnPMethod {
 ///
 /// # Errors
 ///
-/// Returns [`PureCvError::InvalidInput`] when fewer than 4 correspondences are
+/// Returns [`PureCvError::InvalidInput`] when fewer than 6 correspondences are
 /// given, the camera matrix is singular, or `use_extrinsic_guess` is set while
-/// `rvec`/`tvec` are not 3×1 vectors with finite values.
+/// `rvec`/`tvec` are not 3×1 or 1×3 vectors with finite values.
 ///
 /// # Divergences from OpenCV
 ///
@@ -120,6 +122,8 @@ pub enum SolvePnPMethod {
 /// |--------|--------|
 /// | Accepts `Mat` (many layouts) | Accepts `&[Point3f]` / `&[Point2f]` |
 /// | Supports distortion undistortion | Only pin-hole (no distortion correction) |
+/// | Allows ≥4 points (≥3 with guess for `Iterative`) | Requires ≥6 points (DLT initialisation) |
+/// | Iterative refinement via Levenberg-Marquardt | Gauss-Newton refinement |
 /// | Returns `bool` | Returns `Result<bool>` |
 #[allow(clippy::too_many_arguments)]
 pub fn solve_pnp(
@@ -200,8 +204,10 @@ pub fn solve_pnp(
 /// * `image_points`         – Corresponding 2-D image points.
 /// * `camera_matrix`        – 3×3 intrinsic matrix.
 /// * `dist_coeffs`          – Distortion coefficients or `None`.
-/// * `rvec`                 – Output rotation vector (3×1 `f64`).
-/// * `tvec`                 – Output translation vector (3×1 `f64`).
+/// * `rvec`                 – Rotation vector (3×1 or 1×3 `f64`); output is
+///   always rewritten as 3×1.
+/// * `tvec`                 – Translation vector (3×1 or 1×3 `f64`); output is
+///   always rewritten as 3×1.
 /// * `use_extrinsic_guess`  – When `true`, the caller-supplied `rvec`/`tvec`
 ///   seed only the final all-inlier refit (matches OpenCV `solvePnPRansac`:
 ///   minimal-set hypotheses are built from scratch and ignore the guess).
@@ -215,12 +221,24 @@ pub fn solve_pnp(
 ///
 /// # Returns
 ///
-/// `true` when a valid pose was found with at least 4 inliers.
+/// `true` when a valid pose was found with at least 6 inliers. On `Ok(false)`
+/// (no consensus) `rvec`/`tvec` and `inliers` are left unchanged.
 ///
 /// # Errors
 ///
-/// Returns [`PureCvError::InvalidInput`] when fewer than 4 correspondences are
-/// given or the camera matrix is invalid.
+/// Returns [`PureCvError::InvalidInput`] when fewer than 6 correspondences are
+/// given, the camera matrix is invalid, or `use_extrinsic_guess` is set while
+/// `rvec`/`tvec` are not 3×1 or 1×3 vectors with finite values.
+///
+/// # Divergences from OpenCV
+///
+/// | OpenCV | purecv |
+/// |--------|--------|
+/// | Hypotheses via EPnP on 5 points | Hypotheses via DLT on 6 points + Gauss-Newton |
+/// | Final refit from best hypothesis (no guess) via Levenberg-Marquardt | Final refit from DLT on all inliers via Gauss-Newton |
+/// | Adaptive iteration count from `confidence` | Fixed `iterations_count` (`confidence` unused) |
+/// | Supports distortion undistortion | Only pin-hole (no distortion correction) |
+/// | Returns `bool` | Returns `Result<bool>` |
 #[allow(clippy::too_many_arguments)]
 pub fn solve_pnp_ransac(
     object_points: &[Point3f],
@@ -776,16 +794,25 @@ struct PoseGuess {
     t: [f64; 3],
 }
 
+/// `true` when `m` is a 3-element vector in column (3×1) or row (1×3) layout.
+fn is_3x1_or_1x3(m: &Matrix<f64>) -> bool {
+    (m.rows == 3 && m.cols == 1) || (m.rows == 1 && m.cols == 3)
+}
+
 /// Read the user-supplied extrinsic guess from `rvec`/`tvec`.
+///
+/// Accepts 3×1 or 1×3 single-channel vectors, matching `rodrigues` and
+/// OpenCV (`Size(1,3)` or `Size(3,1)`). Outputs are always rewritten as 3×1
+/// by [`write_output`].
 fn read_guess(rvec: &Matrix<f64>, tvec: &Matrix<f64>) -> Result<PoseGuess> {
-    if rvec.rows != 3 || rvec.cols != 1 || rvec.data.len() != 3 {
+    if rvec.channels != 1 || rvec.data.len() != 3 || !is_3x1_or_1x3(rvec) {
         return Err(PureCvError::InvalidInput(
-            "use_extrinsic_guess requires rvec to be a 3x1 matrix".to_string(),
+            "use_extrinsic_guess requires rvec to be a 3x1 or 1x3 matrix".to_string(),
         ));
     }
-    if tvec.rows != 3 || tvec.cols != 1 || tvec.data.len() != 3 {
+    if tvec.channels != 1 || tvec.data.len() != 3 || !is_3x1_or_1x3(tvec) {
         return Err(PureCvError::InvalidInput(
-            "use_extrinsic_guess requires tvec to be a 3x1 matrix".to_string(),
+            "use_extrinsic_guess requires tvec to be a 3x1 or 1x3 matrix".to_string(),
         ));
     }
     let rv = [rvec.data[0], rvec.data[1], rvec.data[2]];

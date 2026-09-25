@@ -476,6 +476,51 @@ mod calib3d_tests {
     }
 
     #[test]
+    fn test_solve_pnp_guess_accepts_1x3() {
+        // Row-vector layout must behave like column-vector layout
+        // (matches `rodrigues` and OpenCV `Size(1,3)`).
+        let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
+        let true_rv = [0.15f64, -0.1, 0.05];
+        let true_tv = [0.2f64, -0.1, 5.5];
+        let cam = make_camera_matrix();
+        let (obj, img) = make_pnp_data(true_rv, true_tv, &k);
+
+        let mut rvec = Matrix::from_vec(
+            1,
+            3,
+            1,
+            vec![true_rv[0] + 0.05, true_rv[1] - 0.05, true_rv[2] + 0.03],
+        );
+        let mut tvec = Matrix::from_vec(
+            1,
+            3,
+            1,
+            vec![true_tv[0] + 0.2, true_tv[1] - 0.2, true_tv[2] + 0.5],
+        );
+        let ok = solve_pnp(
+            &obj,
+            &img,
+            &cam,
+            None,
+            &mut rvec,
+            &mut tvec,
+            true,
+            SolvePnPMethod::Iterative,
+        )
+        .unwrap();
+        assert!(ok);
+        // Outputs are normalised to 3×1.
+        assert_eq!((rvec.rows, rvec.cols), (3, 1));
+        assert_eq!((tvec.rows, tvec.cols), (3, 1));
+        for (got, want) in rvec.data.iter().zip(true_rv.iter()) {
+            assert!(
+                approx_eq(*got, *want, 1e-4),
+                "rvec {rvec:?} expected ~{true_rv:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_solve_pnp_guess_rejects_non_finite() {
         let cam = make_camera_matrix();
         let k = [800.0f64, 0.0, 320.0, 0.0, 800.0, 240.0, 0.0, 0.0, 1.0];
