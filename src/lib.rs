@@ -63,7 +63,7 @@ pub mod video;
 pub mod prelude {
     pub use crate::calib3d::{
         find_fundamental_mat, find_homography, init_undistort_rectify_map, rodrigues, solve_pnp,
-        solve_pnp_ransac, FundamentalMatMethod, HomographyMethod, SolvePnPMethod,
+        solve_pnp_ransac, undistort_points, FundamentalMatMethod, HomographyMethod, SolvePnPMethod,
     };
     pub use crate::core::logging::{tags, LogLevel};
     pub use crate::core::types::{

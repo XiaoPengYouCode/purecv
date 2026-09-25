@@ -52,7 +52,8 @@ use crate::{cv_log_debug, cv_log_warning};
 
 use super::geometry::rvec_to_rmat;
 use super::levmarq::{Callback, LevMarq, Settings as LevMarqSettings};
-use super::linalg::{mat3_inv, mat3_mul, nearest_rotation, null_space_vector, Lcg};
+use super::linalg::{mat3_mul, nearest_rotation, null_space_vector, Lcg};
+use super::undistort::{undistort_normalized_points, DistortionModel, DEFAULT_UNDISTORT_CRITERIA};
 
 // ---------------------------------------------------------------------------
 // Public enumerations
@@ -98,7 +99,9 @@ pub enum SolvePnPMethod {
 /// * `object_points` – World-space 3-D points (at least 4).
 /// * `image_points`  – Corresponding 2-D image points.
 /// * `camera_matrix` – 3×3 intrinsic matrix `K = [[fx,0,cx],[0,fy,cy],[0,0,1]]`.
-/// * `dist_coeffs`   – Distortion coefficients `[k1,k2,p1,p2[,k3…]]` or `None`.
+/// * `dist_coeffs`   – Distortion coefficients `[k1,k2,p1,p2[,k3[,k4,k5,k6[,s1,s2,s3,s4[,tau_x,tau_y]]]]]`
+///   (4, 5, 8, 12 or 14 elements) or `None`.  An empty slice means zero
+///   distortion, like `noArray()` in OpenCV.
 /// * `rvec`          – Output rotation vector (3×1 `f64`).
 /// * `tvec`          – Output translation vector (3×1 `f64`).
 /// * `use_extrinsic_guess` – When `true`, the contents of `rvec`/`tvec` are
@@ -112,14 +115,14 @@ pub enum SolvePnPMethod {
 /// # Errors
 ///
 /// Returns [`PureCvError::InvalidInput`] when fewer than 4 correspondences are
-/// given or the camera matrix is singular.
+/// given, the camera matrix is singular, or `dist_coeffs` has a length other
+/// than 4, 5, 8, 12 or 14.
 ///
 /// # Divergences from OpenCV
 ///
 /// | OpenCV | purecv |
 /// |--------|--------|
 /// | Accepts `Mat` (many layouts) | Accepts `&[Point3f]` / `&[Point2f]` |
-/// | Supports distortion undistortion | Only pin-hole (no distortion correction) |
 /// | Levenberg-Marquardt with geodesic acceleration | [`LevMarq`](super::levmarq::LevMarq) without geodesic acceleration |
 /// | Returns `bool` | Returns `Result<bool>` |
 #[allow(clippy::too_many_arguments)]
@@ -157,23 +160,27 @@ pub fn solve_pnp(
         ));
     }
 
-    let _ = dist_coeffs; // Distortion correction not yet implemented.
     if use_extrinsic_guess {
         return Err(PureCvError::NotImplemented(
             "use_extrinsic_guess is not supported yet".to_string(),
         ));
     }
 
-    // Extract K entries.
+    // Distortion model of the camera, shared by the initialisation and the
+    // refinement below.
     let k = extract_k(camera_matrix)?;
+    let model = DistortionModel::new(dist_coeffs.unwrap_or(&[]))?;
 
-    // Undistort image points (only pin-hole in this release).
-    let norm_pts = undistort_points(image_points, &k)?;
+    // The DLT initial estimate needs ideal (distortion-free) normalized image
+    // coordinates, as in OpenCV's `findExtrinsicCameraParams2`.
+    let norm_pts =
+        undistort_normalized_points(image_points, &k, &model, DEFAULT_UNDISTORT_CRITERIA)?;
 
     // DLT initial estimate.
     let (r_init, t_init) = dlt_pnp(&norm_pts, object_points)?;
 
-    // Levenberg-Marquardt refinement.
+    // Levenberg-Marquardt refinement, in pixels and with the distortion model
+    // applied, exactly like OpenCV's `projectPoints` cost.
     let (r_ref, t_ref) = if use_extrinsic_guess
         && rvec.rows == 3
         && rvec.cols == 1
@@ -182,10 +189,10 @@ pub fn solve_pnp(
     {
         let rv = [rvec.data[0], rvec.data[1], rvec.data[2]];
         let t_guess = [tvec.data[0], tvec.data[1], tvec.data[2]];
-        refine_pose_rvec(&norm_pts, object_points, &rv, &t_guess)
+        refine_pose_rvec(object_points, image_points, &k, &model, &rv, &t_guess)
     } else {
         let rv_init = rmat_to_rvec_approx(&r_init);
-        refine_pose_rvec(&norm_pts, object_points, &rv_init, &t_init)
+        refine_pose_rvec(object_points, image_points, &k, &model, &rv_init, &t_init)
     };
 
     // Convert rotation matrix → rotation vector.
@@ -208,12 +215,14 @@ pub fn solve_pnp(
 /// * `object_points`        – World-space 3-D points.
 /// * `image_points`         – Corresponding 2-D image points.
 /// * `camera_matrix`        – 3×3 intrinsic matrix.
-/// * `dist_coeffs`          – Distortion coefficients or `None`.
+/// * `dist_coeffs`          – Distortion coefficients `[k1,k2,p1,p2[,k3[,k4,k5,k6[,s1,s2,s3,s4[,tau_x,tau_y]]]]]`
+///   (4, 5, 8, 12 or 14 elements) or `None`.
 /// * `rvec`                 – Output rotation vector (3×1 `f64`).
 /// * `tvec`                 – Output translation vector (3×1 `f64`).
 /// * `use_extrinsic_guess`  – Use `rvec`/`tvec` as initial estimate.
 /// * `iterations_count`     – Number of RANSAC iterations (default: 100).
-/// * `reproj_threshold`     – Maximum reprojection error for an inlier (pixels).
+/// * `reproj_threshold`     – Maximum distorted reprojection error for an
+///   inlier (pixels).
 /// * `confidence`           – Desired solution confidence (currently unused;
 ///   iteration count is fixed).
 /// * `inliers`              – When `Some`, filled with the indices of inlier
@@ -227,7 +236,8 @@ pub fn solve_pnp(
 /// # Errors
 ///
 /// Returns [`PureCvError::InvalidInput`] when fewer than 4 correspondences are
-/// given or the camera matrix is invalid.
+/// given, the camera matrix is invalid, or `dist_coeffs` has an unsupported
+/// length.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_pnp_ransac(
     object_points: &[Point3f],
@@ -268,22 +278,15 @@ pub fn solve_pnp_ransac(
     }
 
     let _ = confidence; // Adaptive iteration count not yet implemented.
-    let _ = dist_coeffs; // Distortion correction not yet implemented.
 
     let k = extract_k(camera_matrix)?;
-    let norm_pts = undistort_points(image_points, &k)?;
+    let model = DistortionModel::new(dist_coeffs.unwrap_or(&[]))?;
+    let norm_pts =
+        undistort_normalized_points(image_points, &k, &model, DEFAULT_UNDISTORT_CRITERIA)?;
 
     let max_iters = iterations_count.max(1) as usize;
-    let fx = k[0];
-    let fy = k[4];
-    let f_avg = (fx + fy) / 2.0;
-    if f_avg.abs() < 1e-12 {
-        return Err(PureCvError::InvalidInput(
-            "Invalid focal length in camera_matrix".to_string(),
-        ));
-    }
-    let thr = reproj_threshold as f64 / f_avg;
-    let thr2 = thr * thr;
+    // Inlier threshold on the distorted reprojection error, in pixels.
+    let thr2 = (reproj_threshold as f64) * (reproj_threshold as f64);
 
     let mut rng = Lcg::new(0x1234_5678_9abc_def0);
     let mut best_count = 0usize;
@@ -295,17 +298,19 @@ pub fn solve_pnp_ransac(
     for _ in 0..max_iters {
         let idx = sample_no_replace(&mut rng, n, 6);
         let s_obj: Vec<Point3f> = idx.iter().map(|&i| object_points[i]).collect();
-        let s_img: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
+        let s_norm: Vec<Point2f> = idx.iter().map(|&i| norm_pts[i]).collect();
+        let s_img: Vec<Point2f> = idx.iter().map(|&i| image_points[i]).collect();
 
-        let (r, t) = match dlt_pnp(&s_img, &s_obj) {
+        let (r, t) = match dlt_pnp(&s_norm, &s_obj) {
             Ok(rt) => rt,
             Err(_) => continue,
         };
         let rv = rmat_to_rvec_approx(&r);
-        let (r, t) = refine_pose_rvec(&s_img, &s_obj, &rv, &t);
+        let (r, t) = refine_pose_rvec(&s_obj, &s_img, &k, &model, &rv, &t);
 
-        // Count inliers using reprojection error in *normalized* coordinates.
-        let (count, mask) = count_pnp_inliers(&norm_pts, object_points, &r, &t, thr2);
+        // Count inliers using the distorted reprojection error in pixels.
+        let (count, mask) =
+            count_pnp_inliers(image_points, object_points, &k, &model, &r, &t, thr2);
 
         if count > best_count {
             best_count = count;
@@ -335,16 +340,21 @@ pub fn solve_pnp_ransac(
         .zip(best_inlier_mask.iter())
         .filter_map(|(&p, &ok)| if ok { Some(p) } else { None })
         .collect();
-    let in_img: Vec<Point2f> = norm_pts
+    let in_norm: Vec<Point2f> = norm_pts
+        .iter()
+        .zip(best_inlier_mask.iter())
+        .filter_map(|(&p, &ok)| if ok { Some(p) } else { None })
+        .collect();
+    let in_img: Vec<Point2f> = image_points
         .iter()
         .zip(best_inlier_mask.iter())
         .filter_map(|(&p, &ok)| if ok { Some(p) } else { None })
         .collect();
 
-    let (r_final, t_final) = match dlt_pnp(&in_img, &in_obj) {
+    let (r_final, t_final) = match dlt_pnp(&in_norm, &in_obj) {
         Ok((r, t)) => {
             let rv = rmat_to_rvec_approx(&r);
-            refine_pose_rvec(&in_img, &in_obj, &rv, &t)
+            refine_pose_rvec(&in_obj, &in_img, &k, &model, &rv, &t)
         }
         Err(_) => (best_r, best_t),
     };
@@ -370,7 +380,8 @@ pub fn solve_pnp_ransac(
 /// DLT solution for the PnP problem using normalised image coordinates.
 ///
 /// For each correspondence `(X, Y, Z) → (u, v)` in normalised coordinates
-/// (after K^{-1} multiplication), the linear constraints are:
+/// (ideal, i.e. after K⁻¹ and the inverse distortion model), the linear
+/// constraints are:
 /// ```text
 ///   [ X  Y  Z  1  0  0  0  0  -u*X  -u*Y  -u*Z  -u ] * p = 0
 ///   [ 0  0  0  0  X  Y  Z  1  -v*X  -v*Y  -v*Z  -v ] * p = 0
@@ -484,14 +495,24 @@ fn pnp_refine_settings() -> LevMarqSettings {
     }
 }
 
-/// Reprojection-error objective minimised by [`refine_pose_rvec`], in
-/// normalised image coordinates.
+/// Projects a camera-space point to pixels through the distortion model.
+fn project_camera_point(model: &DistortionModel, k: &[f64; 9], camera: [f64; 3]) -> (f64, f64) {
+    let inv_cz = 1.0 / camera[2];
+    let (xd, yd) = model.project(camera[0] * inv_cz, camera[1] * inv_cz);
+    (k[0] * xd + k[2], k[4] * yd + k[5])
+}
+
+/// Reprojection-error objective minimised by [`refine_pose_rvec`]: the squared
+/// distance, in pixels, between the observed points and their re-projections
+/// through the distortion model (OpenCV's `projectPoints` cost).
 ///
 /// Terms with `|z| < 1e-12` are skipped, exactly as in [`build_jtj`], so
 /// [`Callback::energy`] and [`Callback::compute`] report the same objective.
 struct ReprojectionCallback<'a> {
-    norm_pts: &'a [Point2f],
     obj_pts: &'a [Point3f],
+    image_pts: &'a [Point2f],
+    k: &'a [f64; 9],
+    model: &'a DistortionModel,
 }
 
 impl Callback for ReprojectionCallback<'_> {
@@ -499,7 +520,7 @@ impl Callback for ReprojectionCallback<'_> {
         let r = rvec_to_rmat(param[0], param[1], param[2]);
         let t = [param[3], param[4], param[5]];
         let mut total = 0.0;
-        for i in 0..self.norm_pts.len() {
+        for i in 0..self.obj_pts.len() {
             let xx = self.obj_pts[i].x as f64;
             let yy = self.obj_pts[i].y as f64;
             let zz = self.obj_pts[i].z as f64;
@@ -508,11 +529,14 @@ impl Callback for ReprojectionCallback<'_> {
             if cz.abs() < 1e-12 {
                 continue;
             }
-            let inv_cz = 1.0 / cz;
-            let eu =
-                (r[0] * xx + r[1] * yy + r[2] * zz + t[0]) * inv_cz - self.norm_pts[i].x as f64;
-            let ev =
-                (r[3] * xx + r[4] * yy + r[5] * zz + t[1]) * inv_cz - self.norm_pts[i].y as f64;
+            let camera = [
+                r[0] * xx + r[1] * yy + r[2] * zz + t[0],
+                r[3] * xx + r[4] * yy + r[5] * zz + t[1],
+                cz,
+            ];
+            let (u, v) = project_camera_point(self.model, self.k, camera);
+            let eu = u - self.image_pts[i].x as f64;
+            let ev = v - self.image_pts[i].y as f64;
             total += eu * eu + ev * ev;
         }
         Some(total)
@@ -522,7 +546,15 @@ impl Callback for ReprojectionCallback<'_> {
         let rv = [param[0], param[1], param[2]];
         let t = [param[3], param[4], param[5]];
         let r = rvec_to_rmat(rv[0], rv[1], rv[2]);
-        let (j, b, energy) = build_jtj(&r, &rv, &t, self.norm_pts, self.obj_pts);
+        let (j, b, energy) = build_jtj(
+            &r,
+            &rv,
+            &t,
+            self.obj_pts,
+            self.image_pts,
+            self.k,
+            self.model,
+        );
         jtj.copy_from_slice(&j);
         jtb.copy_from_slice(&b);
         Some(energy)
@@ -530,8 +562,8 @@ impl Callback for ReprojectionCallback<'_> {
 }
 
 /// Refine a pose seeded by the rotation vector `rv_init` and the translation
-/// `t_init`, minimising the sum of squared reprojection errors in normalised
-/// image coordinates with Levenberg-Marquardt.
+/// `t_init`, minimising the sum of squared reprojection errors in *pixels*,
+/// with the distortion model applied, using Levenberg-Marquardt.
 ///
 /// Returns the refined pose as `(R, t)`, where `R` is a rotation *matrix* (not
 /// a rotation vector) in row-major order.
@@ -540,15 +572,22 @@ impl Callback for ReprojectionCallback<'_> {
 /// that the public API cannot express (see `mat3_mul_pub` for the same
 /// pattern).
 pub(super) fn refine_pose_rvec(
-    norm_pts: &[Point2f],
     obj_pts: &[Point3f],
+    image_pts: &[Point2f],
+    k: &[f64; 9],
+    model: &DistortionModel,
     rv_init: &[f64; 3],
     t_init: &[f64; 3],
 ) -> ([f64; 9], [f64; 3]) {
     let mut param = [
         rv_init[0], rv_init[1], rv_init[2], t_init[0], t_init[1], t_init[2],
     ];
-    let mut callback = ReprojectionCallback { norm_pts, obj_pts };
+    let mut callback = ReprojectionCallback {
+        obj_pts,
+        image_pts,
+        k,
+        model,
+    };
     let mut solver = LevMarq::new(6, pnp_refine_settings());
     let report = solver.optimize(&mut param, &mut callback);
     if !report.found {
@@ -566,21 +605,25 @@ pub(super) fn refine_pose_rvec(
     )
 }
 
-/// Build J^T J and J^T r for the reprojection-error least-squares problem
-/// (6-parameter: 3 Rodrigues + 3 translation).
+/// Build J^T J and J^T r for the distorted reprojection-error least-squares
+/// problem (6 parameters: 3 Rodrigues + 3 translation).
+#[allow(clippy::too_many_arguments)]
 fn build_jtj(
     r: &[f64; 9],
     rv: &[f64; 3],
     t: &[f64; 3],
-    norm_pts: &[Point2f],
     obj_pts: &[Point3f],
+    image_pts: &[Point2f],
+    k: &[f64; 9],
+    model: &DistortionModel,
 ) -> ([f64; 36], [f64; 6], f64) {
     let mut jtj = [0.0f64; 36];
     let mut jtb = [0.0f64; 6];
     let mut total_err2 = 0.0f64;
     let theta = (rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2]).sqrt();
+    let (fx, fy) = (k[0], k[4]);
 
-    for i in 0..norm_pts.len() {
+    for i in 0..obj_pts.len() {
         let xx = obj_pts[i].x as f64;
         let yy = obj_pts[i].y as f64;
         let zz = obj_pts[i].z as f64;
@@ -595,44 +638,45 @@ fn build_jtj(
         }
 
         let inv_cz = 1.0 / cz;
-        let proj_u = cx * inv_cz;
-        let proj_v = cy * inv_cz;
+        let xn = cx * inv_cz;
+        let yn = cy * inv_cz;
+        let ((xd, yd), jac) = model.project_with_jacobian(xn, yn);
+        let proj_u = fx * xd + k[2];
+        let proj_v = fy * yd + k[5];
 
-        let eu = proj_u - norm_pts[i].x as f64;
-        let ev = proj_v - norm_pts[i].y as f64;
+        let eu = proj_u - image_pts[i].x as f64;
+        let ev = proj_v - image_pts[i].y as f64;
         total_err2 += eu * eu + ev * ev;
 
-        // Jacobian of (proj_u, proj_v) w.r.t. (rx, ry, rz, tx, ty, tz).
-        // d(proj) / d(camera_point):
-        let dpdu_dcx = inv_cz;
-        let dpdu_dcz = -cx * inv_cz * inv_cz;
-        let dpdv_dcy = inv_cz;
-        let dpdv_dcz = -cy * inv_cz * inv_cz;
-
-        // d(camera_point) / d(rvec) via Rodrigues derivative (approximate).
-        // We use a finite-difference approximation for the rotation Jacobian.
-        let eps = if theta > 1e-4 { theta * 1e-5 } else { 1e-6 };
         let mut j = [0.0f64; 12]; // 2 residuals × 6 params
 
-        for k in 0..3 {
+        // d(camera_point) / d(rvec): finite-difference approximation of the
+        // rotation Jacobian, through the full projection pipeline.
+        let eps = if theta > 1e-4 { theta * 1e-5 } else { 1e-6 };
+        for p in 0..3 {
             let mut rv_p = *rv;
-            rv_p[k] += eps;
+            rv_p[p] += eps;
             let r_p = rvec_to_rmat(rv_p[0], rv_p[1], rv_p[2]);
-            let cx_p = r_p[0] * xx + r_p[1] * yy + r_p[2] * zz + t[0];
-            let cy_p = r_p[3] * xx + r_p[4] * yy + r_p[5] * zz + t[1];
-            let cz_p = r_p[6] * xx + r_p[7] * yy + r_p[8] * zz + t[2];
-            let inv_czp = if cz_p.abs() > 1e-12 { 1.0 / cz_p } else { 0.0 };
-            j[k] = (cx_p * inv_czp - proj_u) / eps;
-            j[6 + k] = (cy_p * inv_czp - proj_v) / eps;
+            let camera_p = [
+                r_p[0] * xx + r_p[1] * yy + r_p[2] * zz + t[0],
+                r_p[3] * xx + r_p[4] * yy + r_p[5] * zz + t[1],
+                r_p[6] * xx + r_p[7] * yy + r_p[8] * zz + t[2],
+            ];
+            if camera_p[2].abs() > 1e-12 {
+                let (u_p, v_p) = project_camera_point(model, k, camera_p);
+                j[p] = (u_p - proj_u) / eps;
+                j[6 + p] = (v_p - proj_v) / eps;
+            }
         }
 
-        // Translation Jacobian (exact).
-        j[3] = dpdu_dcx;
-        j[4] = 0.0;
-        j[5] = dpdu_dcz;
-        j[9] = 0.0;
-        j[10] = dpdv_dcy;
-        j[11] = dpdv_dcz;
+        // d(camera_point) / d(t) is the identity, so the translation Jacobian
+        // is the exact chain rule through the distortion model.
+        j[3] = fx * jac[0] * inv_cz;
+        j[4] = fx * jac[1] * inv_cz;
+        j[5] = -fx * inv_cz * (jac[0] * xn + jac[1] * yn);
+        j[9] = fy * jac[2] * inv_cz;
+        j[10] = fy * jac[3] * inv_cz;
+        j[11] = -fy * inv_cz * (jac[2] * xn + jac[3] * yn);
 
         // Accumulate J^T J and J^T r.
         for a in 0..6 {
@@ -654,14 +698,18 @@ fn build_jtj(
 // RANSAC helpers
 // ---------------------------------------------------------------------------
 
+/// Counts the correspondences whose distorted reprojection error is within
+/// `thr2` squared pixels of the observed point.
 fn count_pnp_inliers(
-    norm_pts: &[Point2f],
+    image_pts: &[Point2f],
     obj_pts: &[Point3f],
+    k: &[f64; 9],
+    model: &DistortionModel,
     r: &[f64; 9],
     t: &[f64; 3],
     thr2: f64,
 ) -> (usize, Vec<bool>) {
-    let n = norm_pts.len();
+    let n = obj_pts.len();
     let mut mask = vec![false; n];
     let mut count = 0usize;
 
@@ -677,9 +725,9 @@ fn count_pnp_inliers(
         if cz.abs() < 1e-12 {
             continue;
         }
-        let inv_cz = 1.0 / cz;
-        let eu = cx * inv_cz - norm_pts[i].x as f64;
-        let ev = cy * inv_cz - norm_pts[i].y as f64;
+        let (u, v) = project_camera_point(model, k, [cx, cy, cz]);
+        let eu = u - image_pts[i].x as f64;
+        let ev = v - image_pts[i].y as f64;
 
         if eu * eu + ev * ev <= thr2 {
             mask[i] = true;
@@ -706,7 +754,7 @@ fn sample_no_replace(rng: &mut Lcg, n: usize, k: usize) -> Vec<usize> {
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the 3×3 camera matrix as a flat array and its inverse.
+/// Extract the 3×3 camera matrix as a flat array.
 fn extract_k(camera_matrix: &Matrix<f64>) -> Result<[f64; 9]> {
     if camera_matrix.data.len() != 9 {
         return Err(PureCvError::InvalidInput(
@@ -719,35 +767,6 @@ fn extract_k(camera_matrix: &Matrix<f64>) -> Result<[f64; 9]> {
         .try_into()
         .map_err(|_| PureCvError::InternalError("camera_matrix layout error".into()))?;
     Ok(k)
-}
-
-/// Apply K^{-1} to image points to obtain normalised camera coordinates.
-fn undistort_points(image_points: &[Point2f], k: &[f64; 9]) -> Result<Vec<Point2f>> {
-    let ki = mat3_inv(k)
-        .ok_or_else(|| PureCvError::InvalidInput("camera_matrix is singular".to_string()))?;
-
-    Ok(image_points
-        .iter()
-        .map(|p| {
-            let x = p.x as f64;
-            let y = p.y as f64;
-            let w = ki[6] * x + ki[7] * y + ki[8];
-            let xn = if w.abs() > 1e-12 {
-                (ki[0] * x + ki[1] * y + ki[2]) / w
-            } else {
-                0.0
-            };
-            let yn = if w.abs() > 1e-12 {
-                (ki[3] * x + ki[4] * y + ki[5]) / w
-            } else {
-                0.0
-            };
-            Point2f {
-                x: xn as f32,
-                y: yn as f32,
-            }
-        })
-        .collect())
 }
 
 /// Convert rotation matrix → Rodrigues vector for use as a refinement

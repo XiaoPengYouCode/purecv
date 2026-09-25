@@ -45,6 +45,7 @@
 //! | [`rodrigues`]       | Convert between rotation vector and rotation matrix |
 //! | [`solve_pnp`]       | Estimate camera pose from 3-D / 2-D correspondences |
 //! | [`solve_pnp_ransac`]| Robust pose estimation with RANSAC |
+//! | [`undistort_points`]| Ideal point coordinates from observed (distorted) points |
 //! | [`LevMarq`]         | Levenberg-Marquardt solver for non-linear least squares |
 //!
 //! # Conventions
@@ -78,4 +79,4 @@ pub use geometry::rodrigues;
 pub use homography::{find_homography, HomographyMethod};
 pub use levmarq::{Callback, LevMarq, Report};
 pub use pose::{solve_pnp, solve_pnp_ransac, SolvePnPMethod};
-pub use undistort::init_undistort_rectify_map;
+pub use undistort::{init_undistort_rectify_map, undistort_points};
