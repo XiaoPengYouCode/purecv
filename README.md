@@ -87,7 +87,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-purecv = "0.8"
+purecv = "0.9"
 ```
 
 PureCV's minimum supported Rust version (MSRV) is **1.88**.
@@ -105,7 +105,7 @@ PureCV's minimum supported Rust version (MSRV) is **1.88**.
 ### `no_std` / embedded support
 
 Build with `--no-default-features` to run on bare-metal targets such as the
-ESP32 (`purecv = { version = "0.8", default-features = false }`). Only `core`
+ESP32 (`purecv = { version = "0.9", default-features = false }`). Only `core`
 and `alloc` are required (an allocator must be provided by the target).
 
 | Module | `no_std` | Notes |
@@ -121,7 +121,7 @@ features gives the scalar, single-threaded code paths.
 
 ```toml
 [dependencies]
-purecv = { version = "0.8", default-features = false }
+purecv = { version = "0.9", default-features = false }
 ```
 
 ```rust
@@ -150,14 +150,14 @@ To enable the `ndarray` feature:
 
 ```toml
 [dependencies]
-purecv = { version = "0.8", features = ["ndarray"] }
+purecv = { version = "0.9", features = ["ndarray"] }
 ```
 
 To enable SIMD + Parallel for maximum performance:
 
 ```toml
 [dependencies]
-purecv = { version = "0.8", features = ["parallel", "simd"] }
+purecv = { version = "0.9", features = ["parallel", "simd"] }
 ```
 
 ### Usage Example
@@ -348,7 +348,7 @@ cargo run --example rectification
 ## 🧪 Testing & Benchmarking
 
 ### Running Tests
-PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **342 unit tests** (plus **40 doc-tests**) covering:
+PureCV uses a comprehensive suite of unit tests to ensure correctness and parity with OpenCV. The test suite currently includes **359 unit tests** (plus **40 doc-tests**) covering:
 
 - **Core module:** Matrix factories, scalar arithmetic variants, bitwise scalar ops, min/max, comparison ops (`compare`, `in_range`), reduction (`reduce`, `count_non_zero`), polar/cartesian conversions, linear algebra (`determinant`, `invert`, `solve`), channel ops (`extract_channel`, `insert_channel`), `DynamicMatrix`, transforms, sorting, clustering, and RNG.
 - **Imgproc module:** Filters, derivatives, edge detection, color conversions (including gray-to-RGB/BGR/RGBA/BGRA), thresholding, morphology (`erode`, `dilate`), pyramids (`pyr_down`, `pyr_up`), kernel helpers (`get_gaussian_kernel`, `get_sobel_kernels`), and histograms/CLAHE (`calc_hist`, `calc_back_project`, `compare_hist`, `equalize_hist`, `Clahe`).

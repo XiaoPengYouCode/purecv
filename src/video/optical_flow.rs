@@ -52,7 +52,7 @@
 //! | `calcOpticalFlowPyrLK` `nextPts` is `InputOutputArray` | initial guess passed via `initial_next_pts: Option<&[Point2f]>` |
 //! | `tryReuseInputImage` optimisation flag | not implemented (correctness only) |
 
-use alloc::{string::ToString, vec::Vec};
+use alloc::{format, string::ToString, vec::Vec};
 // `vec!` is only used by the SIMD-only windowed kernel below.
 #[cfg(feature = "simd")]
 use alloc::vec;
@@ -64,7 +64,7 @@ use crate::core::logging::tags;
 use crate::core::types::{BorderTypes, Point2f, Size2i, TermCriteria, TermType};
 use crate::core::Matrix;
 use crate::cv_log_debug;
-use crate::imgproc::derivatives::sobel;
+use crate::imgproc::derivatives::scharr;
 use crate::imgproc::pyramid::pyr_down;
 
 #[cfg(feature = "parallel")]
@@ -72,6 +72,34 @@ use rayon::prelude::*;
 
 #[cfg(feature = "simd")]
 use super::simd as video_simd;
+
+/// Fixed-point normalisation factor applied to the spatial gradient matrix `H`
+/// before the minimum-eigenvalue test, matching OpenCV's `FLT_SCALE`
+/// (`modules/video/src/lkpyramid.cpp:115`).
+///
+/// OpenCV accumulates `H` from *unnormalised* Scharr derivatives and rescales
+/// by `2^-20` so that `min_eigen_threshold` is a small, resolution-independent
+/// number (its default is `1e-4`). Applying the same factor here keeps
+/// thresholds transferable between the two libraries.
+pub(crate) const FLT_SCALE: f64 = 1.0 / (1u32 << 20) as f64;
+
+/// Degeneracy threshold for the *unscaled* determinant of `H`, equivalent to
+/// OpenCV's `D < FLT_EPSILON` test on its `FLT_SCALE`-scaled determinant
+/// (`modules/video/src/lkpyramid.cpp:419,426`, see #142):
+/// `FLT_EPSILON / FLT_SCALE^2 = 2^-23 / 2^-40 = 2^17 = 131072`.
+pub(crate) const LK_DET_EPSILON: f64 = f32::EPSILON as f64 / (FLT_SCALE * FLT_SCALE);
+
+/// Gain of the Scharr derivatives relative to the true image gradient: the
+/// `[3, 10, 3]` smoothing sums to 16 and the `[-1, 0, 1]` difference spans
+/// 2 px, so a unit-slope ramp gives 32.
+///
+/// `H` and `b` are built from these x32 derivatives, so the temporal
+/// difference `It` in `b` must carry the same x32 for the Newton step
+/// `H^-1 b` to come out in pixels. OpenCV gets this from its fixed-point
+/// window samples (`CV_DESCALE(..., W_BITS1-5)`, i.e. intensities x32, in
+/// `modules/video/src/lkpyramid.cpp`); without it every step is 1/32 of the
+/// true step (see #149).
+const SCHARR_GAIN: f64 = 32.0;
 
 // ---------------------------------------------------------------------------
 // Public flags (mirror OpenCV's OpticalFlowFlags)
@@ -105,9 +133,9 @@ pub const OPTFLOW_LK_GET_MIN_EIGENVALS: i32 = 8;
 pub struct OpticalFlowPyramid {
     /// Pyramid levels from finest (index 0) to coarsest (index n).
     pub levels: Vec<Matrix<f32>>,
-    /// Sobel-x derivative for each level (empty when not requested).
+    /// Scharr-x derivative for each level (empty when not requested).
     pub dx: Vec<Matrix<f32>>,
-    /// Sobel-y derivative for each level (empty when not requested).
+    /// Scharr-y derivative for each level (empty when not requested).
     pub dy: Vec<Matrix<f32>>,
 }
 
@@ -131,8 +159,9 @@ pub struct OpticalFlowPyramid {
 /// * `max_level`        — Maximum number of additional pyramid levels to build
 ///   on top of the original (level 0).  The returned pyramid has at most
 ///   `max_level + 1` levels.
-/// * `with_derivatives` — When `true`, the Sobel-x and Sobel-y derivatives
-///   are computed for every level and stored in the returned struct.
+/// * `with_derivatives` — When `true`, the Scharr-x and Scharr-y derivatives
+///   are computed for every level and stored in the returned struct
+///   (matching `cv::buildOpticalFlowPyramid`).
 /// * `pyr_border`       — Border interpolation used when downsampling.
 /// * `deriv_border`     — Border interpolation used when computing derivatives.
 ///
@@ -188,8 +217,9 @@ pub fn build_optical_flow_pyramid(
         levels.push(next);
     }
 
-    // Optionally compute Sobel derivatives for each level.
-    // When the `parallel` feature is enabled the per-level Sobel passes run
+    // Optionally compute Scharr derivatives for each level, matching
+    // OpenCV's calcScharrDeriv (lkpyramid.cpp) — see #130.
+    // When the `parallel` feature is enabled the per-level passes run
     // concurrently via Rayon; otherwise they execute sequentially.
     let (dx, dy) = if with_derivatives {
         #[cfg(feature = "parallel")]
@@ -197,8 +227,8 @@ pub fn build_optical_flow_pyramid(
             let pairs: Result<Vec<(Matrix<f32>, Matrix<f32>)>> = levels
                 .par_iter()
                 .map(|level| {
-                    let ix: Matrix<f32> = sobel(level, 1, 0, 3, 1.0, 0.0, deriv_border)?;
-                    let iy: Matrix<f32> = sobel(level, 0, 1, 3, 1.0, 0.0, deriv_border)?;
+                    let ix: Matrix<f32> = scharr(level, 1, 0, 1.0, 0.0, deriv_border)?;
+                    let iy: Matrix<f32> = scharr(level, 0, 1, 1.0, 0.0, deriv_border)?;
                     Ok((ix, iy))
                 })
                 .collect();
@@ -212,8 +242,8 @@ pub fn build_optical_flow_pyramid(
             let mut all_dx: Vec<Matrix<f32>> = Vec::with_capacity(n);
             let mut all_dy: Vec<Matrix<f32>> = Vec::with_capacity(n);
             for level in &levels {
-                let ix: Matrix<f32> = sobel(level, 1, 0, 3, 1.0, 0.0, deriv_border)?;
-                let iy: Matrix<f32> = sobel(level, 0, 1, 3, 1.0, 0.0, deriv_border)?;
+                let ix: Matrix<f32> = scharr(level, 1, 0, 1.0, 0.0, deriv_border)?;
+                let iy: Matrix<f32> = scharr(level, 0, 1, 1.0, 0.0, deriv_border)?;
                 all_dx.push(ix);
                 all_dy.push(iy);
             }
@@ -248,6 +278,47 @@ fn build_f32_pyramid(img: &Matrix<f32>, max_level: usize) -> Result<Vec<Matrix<f
     Ok(levels)
 }
 
+/// Sampling pattern of an LK tracking window, matching OpenCV's
+/// `halfWin((winSize.width-1)*0.5f, (winSize.height-1)*0.5f)`
+/// (`modules/video/src/lkpyramid.cpp`, see #144): exactly
+/// `width x height` samples at offsets `k - half`, `k = 0..n`, relative to
+/// the tracked point. For an even size the offsets are half-integers and
+/// bilinear interpolation supplies the samples.
+#[derive(Clone, Copy)]
+struct TrackingWindow {
+    width: i32,
+    height: i32,
+    half_w: f32,
+    half_h: f32,
+}
+
+impl TrackingWindow {
+    /// `win_size` must already be validated (both sides >= 3).
+    fn new(win_size: Size2i) -> Self {
+        Self {
+            width: win_size.width,
+            height: win_size.height,
+            half_w: (win_size.width - 1) as f32 * 0.5,
+            half_h: (win_size.height - 1) as f32 * 0.5,
+        }
+    }
+
+    /// Number of samples, `width * height`.
+    fn area(self) -> usize {
+        (self.width * self.height) as usize
+    }
+
+    /// `(dx, dy)` sample offsets in row-major order (dy outer, dx inner).
+    /// Every sampling loop uses this, so the SIMD path's gathered buffers
+    /// always line up sample-for-sample.
+    fn offsets(self) -> impl Iterator<Item = (f32, f32)> {
+        (0..self.height).flat_map(move |ky| {
+            let dy = ky as f32 - self.half_h;
+            (0..self.width).map(move |kx| (kx as f32 - self.half_w, dy))
+        })
+    }
+}
+
 /// Bilinear interpolation of a single-channel f32 image at fractional position
 /// `(x, y)`.  Out-of-bounds coordinates are clamped to the image border.
 #[inline]
@@ -279,11 +350,11 @@ fn bilinear_interp(img: &Matrix<f32>, x: f32, y: f32) -> f32 {
 ///
 /// * `prev`      — previous frame at this level (single-channel f32).
 /// * `next`      — next frame at this level (single-channel f32).
-/// * `prev_ix`   — Sobel-x derivative of `prev`.
-/// * `prev_iy`   — Sobel-y derivative of `prev`.
+/// * `prev_ix`   — Scharr-x derivative of `prev`.
+/// * `prev_iy`   — Scharr-y derivative of `prev`.
 /// * `px`, `py`  — reference-point coordinates in this level's space.
 /// * `init_u`, `init_v` — initial optical flow estimate at this level.
-/// * `half_win_w`, `half_win_h` — half-sizes of the tracking window.
+/// * `win`       — tracking-window sampling pattern (see [`TrackingWindow`]).
 /// * `max_iters` — maximum refinement iterations.
 /// * `eps`       — convergence threshold (step size squared).
 /// * `min_eigen_threshold` — reject tracking if min eigenvalue falls below this.
@@ -305,8 +376,7 @@ fn lk_single_level(
     py: f32,
     init_u: f32,
     init_v: f32,
-    half_win_w: i32,
-    half_win_h: i32,
+    win: TrackingWindow,
     max_iters: i32,
     eps: f64,
     min_eigen_threshold: f64,
@@ -321,19 +391,17 @@ fn lk_single_level(
 
     #[cfg(feature = "simd")]
     let (h00, h01, h11, ix_win, iy_win, i1_win) = {
-        let n_win = ((2 * half_win_h + 1) * (2 * half_win_w + 1)) as usize;
+        let n_win = win.area();
         let mut ix_win = Vec::with_capacity(n_win);
         let mut iy_win = Vec::with_capacity(n_win);
         let mut i1_win = Vec::with_capacity(n_win);
 
-        for dy in -half_win_h..=half_win_h {
-            for dx in -half_win_w..=half_win_w {
-                let sx = px + dx as f32;
-                let sy = py + dy as f32;
-                ix_win.push(bilinear_interp(prev_ix, sx, sy));
-                iy_win.push(bilinear_interp(prev_iy, sx, sy));
-                i1_win.push(bilinear_interp(prev, sx, sy));
-            }
+        for (dx, dy) in win.offsets() {
+            let sx = px + dx;
+            let sy = py + dy;
+            ix_win.push(bilinear_interp(prev_ix, sx, sy));
+            iy_win.push(bilinear_interp(prev_iy, sx, sy));
+            i1_win.push(bilinear_interp(prev, sx, sy));
         }
 
         let (h00, h01, h11) = video_simd::simd_lk_accumulate_h(&ix_win, &iy_win);
@@ -345,27 +413,31 @@ fn lk_single_level(
         let mut h00 = 0.0f64;
         let mut h01 = 0.0f64;
         let mut h11 = 0.0f64;
-        for dy in -half_win_h..=half_win_h {
-            for dx in -half_win_w..=half_win_w {
-                let sx = px + dx as f32;
-                let sy = py + dy as f32;
-                let ix = bilinear_interp(prev_ix, sx, sy) as f64;
-                let iy = bilinear_interp(prev_iy, sx, sy) as f64;
-                h00 += ix * ix;
-                h01 += ix * iy;
-                h11 += iy * iy;
-            }
+        for (dx, dy) in win.offsets() {
+            let sx = px + dx;
+            let sy = py + dy;
+            let ix = bilinear_interp(prev_ix, sx, sy) as f64;
+            let iy = bilinear_interp(prev_iy, sx, sy) as f64;
+            h00 += ix * ix;
+            h01 += ix * iy;
+            h11 += iy * iy;
         }
         (h00, h01, h11)
     };
 
     // -------------------------------------------------------------------
-    // Compute min eigenvalue of H (normalised by window area).
+    // Compute min eigenvalue of H on OpenCV's scale.
     // -------------------------------------------------------------------
-    let win_area = ((2 * half_win_w + 1) * (2 * half_win_h + 1)) as f64;
-    let h00n = h00 / win_area;
-    let h01n = h01 / win_area;
-    let h11n = h11 / win_area;
+    // OpenCV (`modules/video/src/lkpyramid.cpp:115,415-417`) scales the raw
+    // Scharr-derived H by `FLT_SCALE`, then writes
+    //     minEig = (A11 + A22 - sqrt((A11-A22)^2 + 4*A12^2)) / (2*W*H)
+    // That numerator is `2*lambda_min`, not `lambda_min`, so OpenCV's
+    // effective divisor on a true `lambda_min` is `W*H` -- do NOT also divide
+    // by 2 here, because `min_eigen` below already applies the `* 0.5`.
+    let win_area = win.area() as f64;
+    let h00n = h00 * FLT_SCALE / win_area;
+    let h01n = h01 * FLT_SCALE / win_area;
+    let h11n = h11 * FLT_SCALE / win_area;
 
     let trace = h00n + h11n;
     let det_n = h00n * h11n - h01n * h01n;
@@ -374,15 +446,25 @@ fn lk_single_level(
 
     let det = h00 * h11 - h01 * h01;
 
-    if min_eigen < min_eigen_threshold || det.abs() < f64::EPSILON {
+    // `det` is deliberately left unscaled for the Newton solve below
+    // (FLT_SCALE cancels out of it algebraically), so it is compared against
+    // `LK_DET_EPSILON`, OpenCV's `FLT_EPSILON` threshold rescaled to the raw
+    // determinant. Like OpenCV's `D < FLT_EPSILON`, the comparison is signed:
+    // `H` is positive semi-definite, so a negative `det` is rounding noise on
+    // a singular matrix and must be rejected too.
+    let eigen_lost = min_eigen < min_eigen_threshold;
+    let det_lost = det < LK_DET_EPSILON;
+    if eigen_lost || det_lost {
         cv_log_debug!(
             tags::VIDEO,
-            "LK tracking lost at ({:.2}, {:.2}): min_eigen = {:.6} (threshold = {:.6}), det = {:.6e}",
+            "LK tracking lost at ({:.2}, {:.2}) by {} guard: min_eigen = {:.6} (threshold = {:.6}), det = {:.6e} (threshold = {:.6e})",
             px,
             py,
+            if eigen_lost { "min_eigen" } else { "determinant" },
             min_eigen,
             min_eigen_threshold,
-            det.abs()
+            det,
+            LK_DET_EPSILON
         );
         return (init_u, init_v, min_eigen, false);
     }
@@ -391,41 +473,55 @@ fn lk_single_level(
     let inv_det = 1.0 / det;
 
     // -------------------------------------------------------------------
-    // Iterative refinement.
+    // Iterative refinement. The Newton loop itself lives in `lk_iterate`
+    // (kept separate so it is directly unit-testable without real image
+    // data -- see its own doc comment and #131).
     // -------------------------------------------------------------------
-    let mut u = init_u as f64;
-    let mut v = init_v as f64;
 
-    // SIMD path: pre-allocate a reusable i2 buffer; refill each iteration.
     #[cfg(feature = "simd")]
-    let mut i2_win = vec![0.0f32; ix_win.len()];
-
-    for _iter in 0..max_iters {
-        // ---------------------------------------------------------------
-        // Accumulate the mismatch vector b = -Σ [Ix·It, Iy·It].
-        // ---------------------------------------------------------------
-
-        #[cfg(feature = "simd")]
-        let (bx, by) = {
-            // Regather I2 at current flow estimate (u, v).
-            let mut w_idx = 0usize;
-            for dy in -half_win_h..=half_win_h {
-                for dx in -half_win_w..=half_win_w {
+    {
+        // Pre-allocate a reusable i2 buffer; refilled each iteration.
+        let mut i2_win = vec![0.0f32; ix_win.len()];
+        let (u, v) = lk_iterate(
+            h00,
+            h01,
+            h11,
+            inv_det,
+            init_u as f64,
+            init_v as f64,
+            max_iters,
+            eps,
+            move |u, v| {
+                // Regather I2 at current flow estimate (u, v).
+                for (i2, (dx, dy)) in i2_win.iter_mut().zip(win.offsets()) {
                     let sx = px as f64 + dx as f64;
                     let sy = py as f64 + dy as f64;
-                    i2_win[w_idx] = bilinear_interp(next, (sx + u) as f32, (sy + v) as f32);
-                    w_idx += 1;
+                    *i2 = bilinear_interp(next, (sx + u) as f32, (sy + v) as f32);
                 }
-            }
-            video_simd::simd_lk_accumulate_mismatch(&ix_win, &iy_win, &i1_win, &i2_win)
-        };
+                let (bx, by) =
+                    video_simd::simd_lk_accumulate_mismatch(&ix_win, &iy_win, &i1_win, &i2_win);
+                // Bring It to the derivatives' Scharr scale (#149).
+                (bx * SCHARR_GAIN, by * SCHARR_GAIN)
+            },
+        );
+        (u as f32, v as f32, min_eigen, true)
+    }
 
-        #[cfg(not(feature = "simd"))]
-        let (bx, by) = {
-            let mut bx = 0.0f64;
-            let mut by = 0.0f64;
-            for dy in -half_win_h..=half_win_h {
-                for dx in -half_win_w..=half_win_w {
+    #[cfg(not(feature = "simd"))]
+    {
+        let (u, v) = lk_iterate(
+            h00,
+            h01,
+            h11,
+            inv_det,
+            init_u as f64,
+            init_v as f64,
+            max_iters,
+            eps,
+            move |u, v| {
+                let mut bx = 0.0f64;
+                let mut by = 0.0f64;
+                for (dx, dy) in win.offsets() {
                     let sx = px as f64 + dx as f64;
                     let sy = py as f64 + dy as f64;
 
@@ -439,11 +535,51 @@ fn lk_single_level(
                     bx -= ix * it;
                     by -= iy * it;
                 }
-            }
-            (bx, by)
-        };
+                // Bring It to the derivatives' Scharr scale (#149).
+                (bx * SCHARR_GAIN, by * SCHARR_GAIN)
+            },
+        );
+        (u as f32, v as f32, min_eigen, true)
+    }
+}
 
+/// Run the Newton-Raphson refinement loop for a single LK pyramid level,
+/// given a fixed spatial-gradient matrix `H` and a way to compute the
+/// mismatch vector `b` at the current flow estimate.
+///
+/// Extracted from [`lk_single_level`] so the iteration itself is directly
+/// unit-testable without needing real image data (see `video::tests`).
+///
+/// `compute_mismatch(u, v)` returns `(bx, by)`, the mismatch vector at flow
+/// estimate `(u, v)`; production callers sample it from the image pair via
+/// bilinear interpolation (see [`lk_single_level`]'s two call sites), but
+/// any function works for testing.
+///
+/// Mirrors OpenCV's per-iteration loop, including the oscillation check
+/// (`modules/video/src/lkpyramid.cpp:610-627`, see #131): if two
+/// consecutive Newton steps nearly cancel (`|eta_i + eta_{i-1}| < 0.01` on
+/// both axes, checked from the second iteration on), the solver undoes
+/// half of the just-applied step and stops.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lk_iterate(
+    h00: f64,
+    h01: f64,
+    h11: f64,
+    inv_det: f64,
+    init_u: f64,
+    init_v: f64,
+    max_iters: i32,
+    eps: f64,
+    mut compute_mismatch: impl FnMut(f64, f64) -> (f64, f64),
+) -> (f64, f64) {
+    let mut u = init_u;
+    let mut v = init_v;
+    let mut prev_eta_u = 0.0f64;
+    let mut prev_eta_v = 0.0f64;
+
+    for iter in 0..max_iters {
         // Solve H * (eta_u, eta_v) = (bx, by)
+        let (bx, by) = compute_mismatch(u, v);
         let eta_u = (h11 * bx - h01 * by) * inv_det;
         let eta_v = (-h01 * bx + h00 * by) * inv_det;
 
@@ -453,9 +589,23 @@ fn lk_single_level(
         if eta_u * eta_u + eta_v * eta_v < eps {
             break;
         }
+
+        // Oscillation fallback, mirroring OpenCV
+        // (modules/video/src/lkpyramid.cpp:620-626, see #131): if this
+        // step nearly cancels the previous one, the solve is bouncing
+        // around the optimum rather than converging onto it. Undo half
+        // of the just-applied step and stop, instead of risking another
+        // full step that overshoots again.
+        if iter > 0 && (eta_u + prev_eta_u).abs() < 0.01 && (eta_v + prev_eta_v).abs() < 0.01 {
+            u -= eta_u * 0.5;
+            v -= eta_v * 0.5;
+            break;
+        }
+        prev_eta_u = eta_u;
+        prev_eta_v = eta_v;
     }
 
-    (u as f32, v as f32, min_eigen, true)
+    (u, v)
 }
 
 /// Compute the mean-absolute error (MAE) between matching `win_size`
@@ -465,26 +615,15 @@ fn compute_tracking_error(
     next: &Matrix<f32>,
     prev_pt: Point2f,
     next_pt: Point2f,
-    half_win_w: i32,
-    half_win_h: i32,
+    win: TrackingWindow,
 ) -> f32 {
     let mut error = 0.0f32;
-    let mut count = 0u32;
-
-    for dy in -half_win_h..=half_win_h {
-        for dx in -half_win_w..=half_win_w {
-            let i1 = bilinear_interp(prev, prev_pt.x + dx as f32, prev_pt.y + dy as f32);
-            let i2 = bilinear_interp(next, next_pt.x + dx as f32, next_pt.y + dy as f32);
-            error += (i2 - i1).abs();
-            count += 1;
-        }
+    for (dx, dy) in win.offsets() {
+        let i1 = bilinear_interp(prev, prev_pt.x + dx, prev_pt.y + dy);
+        let i2 = bilinear_interp(next, next_pt.x + dx, next_pt.y + dy);
+        error += (i2 - i1).abs();
     }
-
-    if count > 0 {
-        error / count as f32
-    } else {
-        0.0
-    }
+    error / win.area() as f32
 }
 
 // ---------------------------------------------------------------------------
@@ -517,13 +656,31 @@ fn compute_tracking_error(
 /// * `prev_pts`            — Feature points to track, in `prev_img` coordinates.
 /// * `initial_next_pts`    — Optional initial guess for `nextPts`.  Passed
 ///   together with [`OPTFLOW_USE_INITIAL_FLOW`]; ignored otherwise.
-/// * `win_size`            — Size of the search window at each pyramid level.
+/// * `win_size`            — Size of the search window at each pyramid level;
+///   both sides must be at least 3. As in OpenCV, the window holds exactly
+///   `width x height` samples centred on the point, at offsets
+///   `k - (n - 1) / 2` for `k = 0..n`, so an even size samples at
+///   half-integer offsets via bilinear interpolation.
 /// * `max_level`           — Pyramid depth (0 = no pyramid, just the original).
 /// * `criteria`            — Iteration termination criteria.
 /// * `flags`               — Option flags; combine [`OPTFLOW_USE_INITIAL_FLOW`]
 ///   and/or [`OPTFLOW_LK_GET_MIN_EIGENVALS`].
 /// * `min_eigen_threshold` — Points whose spatial-gradient matrix has a
-///   minimum eigenvalue below this threshold are marked as lost.
+///   minimum eigenvalue below this threshold are marked as lost. The
+///   gradient matrix is built from Scharr derivatives and normalised by
+///   OpenCV's `FLT_SCALE = 2^-20` and the window area, matching
+///   `cv::calcOpticalFlowPyrLK` (see #130 and #138), so this value is on the
+///   same scale as OpenCV's and its `1e-4` default transfers directly. A
+///   point can also be marked lost independently of this threshold when
+///   its gradient matrix is near-singular (the determinant guard,
+///   matching OpenCV's `D < FLT_EPSILON`). As in OpenCV, both guards only
+///   mark a point lost at the finest pyramid level (level 0); at a coarser
+///   level they skip refinement for that level and the propagated flow
+///   estimate carries on to the next finer one.
+///   Thresholds tuned against a purecv build predating both fixes must be
+///   retuned: Scharr multiplies the gradient matrix by 16 relative to the
+///   Sobel derivatives used then, and `FLT_SCALE` divides by `2^20`, so such
+///   thresholds read about `2^20 / 16 = 65536` times larger on this scale.
 ///
 /// # Returns
 /// A tuple `(next_pts, status, err)`:
@@ -534,7 +691,8 @@ fn compute_tracking_error(
 ///
 /// # Errors
 /// Returns [`PureCvError::InvalidInput`] if either input image is not
-/// single-channel, or if their dimensions differ.
+/// single-channel or `win_size` is smaller than 3x3, and
+/// [`PureCvError::InvalidDimensions`] if the images' dimensions differ.
 ///
 /// # Example
 /// ```
@@ -586,6 +744,13 @@ pub fn calc_optical_flow_pyramid_lk(
                 .to_string(),
         ));
     }
+    // Mirrors OpenCV's `CV_Assert(winSize.width > 2 && winSize.height > 2)`.
+    if win_size.width < 3 || win_size.height < 3 {
+        return Err(PureCvError::InvalidInput(format!(
+            "calc_optical_flow_pyramid_lk: win_size must be at least 3x3, got {}x{}",
+            win_size.width, win_size.height
+        )));
+    }
 
     let n_pts = prev_pts.len();
     if n_pts == 0 {
@@ -609,8 +774,7 @@ pub fn calc_optical_flow_pyramid_lk(
     let use_initial_flow = (flags & OPTFLOW_USE_INITIAL_FLOW) != 0;
     let get_min_eigenvals = (flags & OPTFLOW_LK_GET_MIN_EIGENVALS) != 0;
 
-    let half_win_w = win_size.width / 2;
-    let half_win_h = win_size.height / 2;
+    let win = TrackingWindow::new(win_size);
 
     // ------------------------------------------------------------------
     // Convert images to f32 and build pyramids
@@ -622,15 +786,16 @@ pub fn calc_optical_flow_pyramid_lk(
     let next_pyr = build_f32_pyramid(&next_f32, max_level)?;
     let actual_levels = prev_pyr.len().min(next_pyr.len());
 
-    // Pre-compute Sobel derivatives for each level of the previous frame.
-    // When `parallel` is enabled the per-level Sobel passes run concurrently.
+    // Pre-compute Scharr derivatives for each level of the previous frame,
+    // matching OpenCV's calcScharrDeriv (lkpyramid.cpp) — see #130. When
+    // `parallel` is enabled the per-level passes run concurrently.
     #[cfg(feature = "parallel")]
     let (prev_ix, prev_iy): (Vec<Matrix<f32>>, Vec<Matrix<f32>>) = {
         let pairs: Result<Vec<(Matrix<f32>, Matrix<f32>)>> = prev_pyr[..actual_levels]
             .par_iter()
             .map(|level| {
-                let ix: Matrix<f32> = sobel(level, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
-                let iy: Matrix<f32> = sobel(level, 0, 1, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
+                let ix: Matrix<f32> = scharr(level, 1, 0, 1.0, 0.0, BorderTypes::Reflect101)?;
+                let iy: Matrix<f32> = scharr(level, 0, 1, 1.0, 0.0, BorderTypes::Reflect101)?;
                 Ok((ix, iy))
             })
             .collect();
@@ -642,8 +807,8 @@ pub fn calc_optical_flow_pyramid_lk(
         let mut prev_ix: Vec<Matrix<f32>> = Vec::with_capacity(actual_levels);
         let mut prev_iy: Vec<Matrix<f32>> = Vec::with_capacity(actual_levels);
         for level in &prev_pyr[..actual_levels] {
-            let ix: Matrix<f32> = sobel(level, 1, 0, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
-            let iy: Matrix<f32> = sobel(level, 0, 1, 3, 1.0, 0.0, BorderTypes::Reflect101)?;
+            let ix: Matrix<f32> = scharr(level, 1, 0, 1.0, 0.0, BorderTypes::Reflect101)?;
+            let iy: Matrix<f32> = scharr(level, 0, 1, 1.0, 0.0, BorderTypes::Reflect101)?;
             prev_ix.push(ix);
             prev_iy.push(iy);
         }
@@ -724,8 +889,7 @@ pub fn calc_optical_flow_pyramid_lk(
                 py,
                 u,
                 v,
-                half_win_w,
-                half_win_h,
+                win,
                 max_iters,
                 eps,
                 min_eigen_threshold,
@@ -735,9 +899,13 @@ pub fn calc_optical_flow_pyramid_lk(
             v = fv;
             min_eigen = ev;
 
-            if !success {
+            // Like OpenCV (`lkpyramid.cpp`, the `minEig < minEigThreshold ||
+            // D < FLT_EPSILON` branch), a degenerate window only loses the
+            // point at the finest level. At a coarser level it just skips
+            // refinement there: `lk_single_level` hands back the propagated
+            // (u, v) unchanged, which carries on to the next level (#145).
+            if !success && level == 0 {
                 tracked = false;
-                break;
             }
         }
 
@@ -746,9 +914,7 @@ pub fn calc_optical_flow_pyramid_lk(
             let e = if get_min_eigenvals {
                 min_eigen as f32
             } else {
-                compute_tracking_error(
-                    &prev_f32, &next_f32, prev_pt, next_pt, half_win_w, half_win_h,
-                )
+                compute_tracking_error(&prev_f32, &next_f32, prev_pt, next_pt, win)
             };
             (next_pt, 1u8, e)
         } else {

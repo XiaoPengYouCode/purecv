@@ -38,9 +38,10 @@
 mod video_tests {
     use crate::core::types::{BorderTypes, Point2f, Size2i, TermCriteria, TermType};
     use crate::core::Matrix;
+    use crate::imgproc::derivatives::scharr;
     use crate::video::optical_flow::{
-        build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, OPTFLOW_LK_GET_MIN_EIGENVALS,
-        OPTFLOW_USE_INITIAL_FLOW,
+        build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, lk_iterate, FLT_SCALE,
+        LK_DET_EPSILON, OPTFLOW_LK_GET_MIN_EIGENVALS, OPTFLOW_USE_INITIAL_FLOW,
     };
 
     // ------------------------------------------------------------------
@@ -84,9 +85,11 @@ mod video_tests {
         assert_eq!(pyr.levels[3].rows, 8);
     }
 
-    // miri: ~45s under interpretation. The Sobel `unsafe` fast path it exercises
-    // is still covered by imgproc::tests::test_sobel (f32/ksize 3, ~0.8s under
-    // Miri), so no UB coverage is lost here. See .agents/MIRI_PLAN.md §4.
+    // miri: ~45s under interpretation. Post-#130 this exercises the Scharr
+    // `unsafe` fast path (build_optical_flow_pyramid switched from Sobel to
+    // Scharr), still covered by imgproc::tests::test_scharr (f32/ksize -1,
+    // ~0.8s under Miri), so no UB coverage is lost here. See
+    // .agents/MIRI_PLAN.md §4.
     #[cfg_attr(miri, ignore)]
     #[test]
     fn test_build_pyramid_with_derivatives() {
@@ -108,6 +111,56 @@ mod video_tests {
             assert_eq!(pyr.dx[l].rows, pyr.levels[l].rows);
             assert_eq!(pyr.dx[l].cols, pyr.levels[l].cols);
         }
+    }
+
+    // Not Miri-ignored: measured at ~0.8s under Miri (std,simd), well under
+    // the >30s exclusion threshold in .agents/MIRI_PLAN.md §4, despite
+    // exercising the same unsafe Scharr fast path as
+    // test_build_pyramid_with_derivatives.
+    #[test]
+    fn test_build_pyramid_derivatives_use_scharr() {
+        // 5x5 linear ramp v(x, y) = 2*x + y. For a linear ramp the 3x3
+        // derivative response at any interior pixel has an exact closed
+        // form: Ix = 2*a*sum(ky), Iy = 2*b*sum(ky), where sum(ky) is 4 for
+        // Sobel's [1,2,1] smoothing kernel or 16 for Scharr's [3,10,3].
+        // purecv#130: this must be 16 (Scharr), not 4 (Sobel).
+        let a = 2.0f32;
+        let b = 1.0f32;
+        let mut data = vec![0u8; 5 * 5];
+        for y in 0..5usize {
+            for x in 0..5usize {
+                data[y * 5 + x] = (a * x as f32 + b * y as f32) as u8;
+            }
+        }
+        let img = Matrix::<u8>::from_vec(5, 5, 1, data);
+
+        let pyr = build_optical_flow_pyramid(
+            &img,
+            Size2i::new(3, 3),
+            0, // single level: pure derivative check, no pyr_down involved
+            true,
+            BorderTypes::Reflect101,
+            BorderTypes::Reflect101,
+        )
+        .unwrap();
+
+        // Center pixel (2, 2): full 3x3 neighborhood inside the image, so
+        // border interpolation never kicks in and the closed form is exact.
+        let idx = 2 * 5 + 2;
+        let expected_ix = 32.0 * a; // Scharr: 2*a*16
+        let expected_iy = 32.0 * b;
+
+        assert!(
+            (pyr.dx[0].data[idx] - expected_ix).abs() < 1e-4,
+            "expected Ix = {expected_ix} (Scharr), got {}; build_optical_flow_pyramid \
+             must use Scharr, not Sobel, derivatives",
+            pyr.dx[0].data[idx]
+        );
+        assert!(
+            (pyr.dy[0].data[idx] - expected_iy).abs() < 1e-4,
+            "expected Iy = {expected_iy} (Scharr), got {}",
+            pyr.dy[0].data[idx]
+        );
     }
 
     #[test]
@@ -313,9 +366,10 @@ mod video_tests {
 
         assert_eq!(status[0], 1, "point should be tracked");
         let estimated_dx = next_pts[0].x - pts[0].x;
-        // Allow ±1.5 pixels tolerance for this simple test.
+        // Recovered to within ~0.005 px. This used to allow ±1.5 px, which
+        // hid #149 (Newton steps 1/32 too small): the estimate was 2.84.
         assert!(
-            (estimated_dx - shift as f32).abs() < 1.5,
+            (estimated_dx - shift as f32).abs() < 0.05,
             "expected flow ~{shift}, got {estimated_dx:.2}"
         );
     }
@@ -390,5 +444,698 @@ mod video_tests {
 
         assert_eq!(status[0], 1);
         assert!((next_pts[0].x - 32.0).abs() < 1.0);
+    }
+
+    /// `calc_optical_flow_pyramid_lk`'s derivative computation is private,
+    /// so pin it through the public interface: independently compute the
+    /// documented H-matrix formula from a direct `scharr()` call, and check
+    /// it against `err[0]` (min eigenvalue) reported via
+    /// OPTFLOW_LK_GET_MIN_EIGENVALS. purecv#130: pins the Scharr operator;
+    /// this test failed against the pre-fix Sobel implementation.
+    // Not Miri-ignored: measured at ~18s under Miri (std,simd), under the
+    // >30s exclusion threshold in .agents/MIRI_PLAN.md §4, despite
+    // exercising the same unsafe Scharr fast path as
+    // test_build_pyramid_with_derivatives.
+    #[test]
+    fn test_calc_optical_flow_pyramid_lk_uses_scharr_derivatives() {
+        // Same textured frame as the module's doc example: an 8x8 bright
+        // square gives a genuinely 2D gradient (non-degenerate H) at its
+        // edges, unlike a flat region or a pure linear ramp.
+        let mut data = vec![0u8; 64 * 64];
+        for r in 28..36 {
+            for c in 28..36 {
+                data[r * 64 + c] = 200;
+            }
+        }
+        let frame = Matrix::<u8>::from_vec(64, 64, 1, data);
+        let pt = Point2f::new(32.0, 32.0);
+        let win_size = Size2i::new(11, 11);
+        let half_win_w = win_size.width / 2;
+        let half_win_h = win_size.height / 2;
+
+        // Reference: replicate the documented H-matrix formula using a
+        // direct scharr() call — the operator OpenCV actually uses.
+        let frame_f32 = frame.convert_to::<f32>().unwrap();
+        let ix = scharr(&frame_f32, 1, 0, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
+        let iy = scharr(&frame_f32, 0, 1, 1.0, 0.0, BorderTypes::Reflect101).unwrap();
+
+        let px = pt.x as i32;
+        let py = pt.y as i32;
+        let cols = ix.cols;
+        // keep in sync with lk_single_level's H/eigenvalue computation
+        // (src/video/optical_flow.rs, near the min_eigen_threshold handling
+        // in the single-level LK solver) — this test intentionally
+        // duplicates that private formula for black-box verification.
+        let mut h00 = 0.0f64;
+        let mut h01 = 0.0f64;
+        let mut h11 = 0.0f64;
+        for dy in -half_win_h..=half_win_h {
+            for dx in -half_win_w..=half_win_w {
+                let idx = ((py + dy) as usize) * cols + (px + dx) as usize;
+                let vx = ix.data[idx] as f64;
+                let vy = iy.data[idx] as f64;
+                h00 += vx * vx;
+                h01 += vx * vy;
+                h11 += vy * vy;
+            }
+        }
+        let win_area = ((2 * half_win_w + 1) * (2 * half_win_h + 1)) as f64;
+        // purecv#138: H is scaled by OpenCV's FLT_SCALE = 2^-20 as well as by
+        // the window area.
+        let (h00n, h01n, h11n) = (
+            h00 * FLT_SCALE / win_area,
+            h01 * FLT_SCALE / win_area,
+            h11 * FLT_SCALE / win_area,
+        );
+        let trace = h00n + h11n;
+        let det_n = h00n * h11n - h01n * h01n;
+        let disc = (trace * trace - 4.0 * det_n).max(0.0).sqrt();
+        let expected_min_eigen = (trace - disc) * 0.5;
+
+        // Actual: what calc_optical_flow_pyramid_lk reports.
+        let criteria = TermCriteria::new(TermType::Both, 20, 0.03);
+        let (_next_pts, status, err) = calc_optical_flow_pyramid_lk(
+            &frame,
+            &frame,
+            &[pt],
+            None,
+            win_size,
+            0, // max_level: single level keeps point coordinates unscaled
+            criteria,
+            OPTFLOW_LK_GET_MIN_EIGENVALS,
+            0.0, // min_eigen_threshold: accept regardless of scale
+        )
+        .unwrap();
+
+        assert_eq!(status[0], 1);
+        debug_assert!(
+            expected_min_eigen > 0.0,
+            "test fixture must produce a non-degenerate H matrix"
+        );
+        let relative_error = (err[0] as f64 - expected_min_eigen).abs() / expected_min_eigen.abs();
+        assert!(
+            relative_error < 1e-5,
+            "expected min_eigen {expected_min_eigen} (Scharr), got {} (relative error {relative_error}); \
+             calc_optical_flow_pyramid_lk must use the same Scharr derivatives as scharr()",
+            err[0]
+        );
+    }
+
+    /// Pins the reported minimum eigenvalue to OpenCV's scale — `FLT_SCALE`
+    /// (`2^-20`) with the window area as the only other divisor — against a
+    /// closed-form value. purecv#138: the pre-fix code omitted `FLT_SCALE`
+    /// entirely, and dividing by `2 * win_area` instead of `win_area` would
+    /// halve the result, since `min_eigen` already applies the `* 0.5` of the
+    /// eigenvalue formula.
+    // Not Miri-ignored: measured at ~11.9s under Miri (std,simd), well under
+    // the >30s exclusion threshold in .agents/MIRI_PLAN.md §4, despite
+    // reaching the same unsafe Scharr fast path as the #130 tests (this one
+    // goes through calc_optical_flow_pyramid_lk -> scharr -> fast_deriv_3x3).
+    #[test]
+    fn test_lk_min_eigen_matches_opencv_scale() {
+        // Separable image v(x, y) = f(x) + g(y). For a separable image the
+        // Scharr response is exact and depends on one axis only:
+        //     Ix(x) = 16 * (f(x+1) - f(x-1)),  Iy(y) = 16 * (g(y+1) - g(y-1))
+        // (16 = sum of Scharr's [3,10,3] smoothing kernel).
+        // Over the 3x3 window at (32,32): Ix = 160 on the x=31 column only,
+        // Iy = 160 on the y=33 row only, so
+        //     h00 = h11 = 3*160^2 = 76800,  h01 = 160*160 = 25600
+        // and, since h00n == h11n, min_eigen = h00n - |h01n| =
+        //     (76800 - 25600) * 2^-20 / 9 = 51200 / 9437184
+        let mut data = vec![0u8; 64 * 64];
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let f = if x == 32 || x == 34 { 10u16 } else { 0 };
+                let g = if y == 34 { 10u16 } else { 0 };
+                data[y * 64 + x] = (f + g) as u8;
+            }
+        }
+        let frame = Matrix::<u8>::from_vec(64, 64, 1, data);
+        let criteria = TermCriteria::new(TermType::Both, 20, 0.03);
+        let (_next_pts, status, err) = calc_optical_flow_pyramid_lk(
+            &frame,
+            &frame,
+            &[Point2f::new(32.0, 32.0)],
+            None,
+            Size2i::new(3, 3),
+            0, // max_level: single level keeps point coordinates unscaled
+            criteria,
+            OPTFLOW_LK_GET_MIN_EIGENVALS,
+            0.0, // min_eigen_threshold: accept regardless of scale
+        )
+        .unwrap();
+
+        assert_eq!(status[0], 1);
+        // Literal, deliberately not derived from FLT_SCALE: this test must
+        // fail if that constant is ever changed, not follow it.
+        let expected = 51200.0 / (9.0 * 1048576.0); // 0.005425347222...
+        let relative_error = (err[0] as f64 - expected).abs() / expected;
+        assert!(
+            relative_error < 1e-5,
+            "min eigenvalue must be on OpenCV's scale: expected {expected}, got {} \
+             (relative error {relative_error})",
+            err[0]
+        );
+    }
+
+    /// Hand-crafted mismatch sequence that oscillates by construction, so
+    /// this test needs no real image data. H = identity (h00=h11=1, h01=0),
+    /// so inv_det=1 and eta=(bx, by) directly. The closure returns (1.0,
+    /// 0.5) on call 1, (-1.0, -0.5) on call 2, and (0.0, 0.0) on every call
+    /// after that. Trace:
+    ///
+    /// - iter 0: eta=(1.0, 0.5) -> u,v=(1.0, 0.5) (not converged; eps=1e-9
+    ///   is tiny)
+    /// - iter 1: eta=(-1.0, -0.5) -> u,v=(0.0, 0.0) (not converged) — but
+    ///   eta_1 + eta_0 = (0, 0) on both axes, so the oscillation fallback
+    ///   fires: u,v = (0.0, 0.0) - (-1.0, -0.5) * 0.5 = (0.5, 0.25)
+    ///
+    /// purecv#131: without the fix, iteration would continue instead — a
+    /// 3rd call returning (0, 0) converges immediately at (0.0, 0.0). That
+    /// is exactly what Task 1's unfixed `lk_iterate` did, confirmed RED.
+    ///
+    /// This pins the math directly via `lk_iterate` rather than through a
+    /// real-image `calc_optical_flow_pyramid_lk` call because a systematic
+    /// search across several synthetic image patterns (periodic gratings,
+    /// thin bars, Gaussian dots, random noise, occlusion boundaries) found
+    /// no real-image scenario in this codebase that naturally triggers the
+    /// oscillation branch — and OpenCV's own test suite has no dedicated
+    /// test for this branch either.
+    #[test]
+    fn test_lk_iterate_applies_oscillation_half_step() {
+        let mut call = 0;
+        let (u, v) = lk_iterate(
+            1.0,  // h00
+            0.0,  // h01
+            1.0,  // h11
+            1.0,  // inv_det
+            0.0,  // init_u
+            0.0,  // init_v
+            10,   // max_iters
+            1e-9, // eps: tiny, never satisfied by these steps
+            |_u, _v| {
+                call += 1;
+                match call {
+                    1 => (1.0, 0.5),
+                    2 => (-1.0, -0.5),
+                    _ => (0.0, 0.0),
+                }
+            },
+        );
+
+        assert!(
+            (u - 0.5).abs() < 1e-9,
+            "expected u = 0.5 (oscillation half-step fallback), got {u}"
+        );
+        assert!(
+            (v - 0.25).abs() < 1e-9,
+            "expected v = 0.25 (oscillation half-step fallback), got {v}"
+        );
+    }
+
+    /// Pins the determinant-degeneracy guard to OpenCV's scale. purecv#142:
+    /// the guard compared purecv's raw (unscaled) `det` against
+    /// `f64::EPSILON`, while OpenCV compares its `FLT_SCALE`-scaled `D`
+    /// against `FLT_EPSILON` -- roughly 10^21 looser, so a window that's
+    /// only slightly rank-deficient (not exactly singular) passed through
+    /// uncaught.
+    ///
+    /// This 3x3 window is a near-degenerate case found by direct search:
+    /// a minimum-contrast (0/1) vertical edge, with the edge shifted by
+    /// one pixel for a single row inside the window. That single-pixel
+    /// deviation gives a tiny nonzero y-gradient (with the Scharr
+    /// `[3,10,3]`/`[-1,0,1]` kernels purecv uses; see #130), so `det` is
+    /// small and positive (114620, confirmed by direct computation)
+    /// rather than exactly zero -- large enough that the old
+    /// `f64::EPSILON` check accepted it (as a real tracked point,
+    /// `status = 1`), but well under OpenCV's effective raw threshold of
+    /// `f32::EPSILON / FLT_SCALE^2` = `2^17` = 131072, so it should be
+    /// rejected (`status = 0`) like OpenCV would.
+    #[test]
+    fn test_lk_rejects_near_degenerate_window() {
+        let size = 32usize;
+        let cy = 16usize;
+        let edge_x = 16usize;
+        let shift_row = cy - 1;
+
+        let mut data = vec![0u8; size * size];
+        for y in 0..size {
+            let ex = if y == shift_row { edge_x + 1 } else { edge_x };
+            for x in 0..size {
+                data[y * size + x] = if x >= ex { 1 } else { 0 };
+            }
+        }
+        let prev = Matrix::<u8>::from_vec(size, size, 1, data.clone());
+        let next = Matrix::<u8>::from_vec(size, size, 1, data);
+
+        let pts = vec![Point2f::new(edge_x as f32, cy as f32)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.03);
+
+        let (_next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+            &prev,
+            &next,
+            &pts,
+            None,
+            Size2i::new(3, 3),
+            0, // max_level: single level, keeps point coordinates unscaled
+            criteria,
+            0,
+            0.0, // min_eigen_threshold: 0 so only the determinant guard can reject
+        )
+        .unwrap();
+
+        assert_eq!(
+            status[0], 0,
+            "near-degenerate window (det=114620, well under OpenCV's effective \
+             raw threshold of 131072 (2^17)) must be rejected, matching OpenCV"
+        );
+    }
+
+    /// Accept-side companion to `test_lk_rejects_near_degenerate_window`:
+    /// pins the determinant guard from above so it cannot silently start
+    /// over-rejecting (e.g. a wrong `FLT_SCALE` power or a flipped
+    /// comparison).
+    ///
+    /// Same minimum-contrast (0/1) vertical edge at x = 16, but the three
+    /// window rows (y = 15, 16, 17) put the edge at x = 15, 14, 15. With
+    /// purecv's Scharr kernels (#130) this 3x3 window gives `det = 139552`
+    /// (exact integer arithmetic, confirmed by direct computation) --
+    /// about 6.5% above `LK_DET_EPSILON` = 2^17 = 131072 -- so the point
+    /// must still be tracked (`status = 1`).
+    #[test]
+    fn test_lk_accepts_window_just_above_det_threshold() {
+        assert_eq!(LK_DET_EPSILON, 131072.0);
+
+        let size = 32usize;
+        let cy = 16usize;
+        let edge_x = 16usize;
+
+        let mut data = vec![0u8; size * size];
+        for y in 0..size {
+            let ex = match y {
+                15 | 17 => edge_x - 1,
+                16 => edge_x - 2,
+                _ => edge_x,
+            };
+            for x in 0..size {
+                data[y * size + x] = if x >= ex { 1 } else { 0 };
+            }
+        }
+        let prev = Matrix::<u8>::from_vec(size, size, 1, data.clone());
+        let next = Matrix::<u8>::from_vec(size, size, 1, data);
+
+        let pts = vec![Point2f::new(edge_x as f32, cy as f32)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.03);
+
+        let (next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+            &prev,
+            &next,
+            &pts,
+            None,
+            Size2i::new(3, 3),
+            0, // max_level: single level, keeps point coordinates unscaled
+            criteria,
+            0,
+            0.0, // min_eigen_threshold: 0 so only the determinant guard can reject
+        )
+        .unwrap();
+
+        assert_eq!(
+            status[0], 1,
+            "window with det=139552, just above the effective raw threshold \
+             of 131072 (2^17), must still be tracked"
+        );
+        // Identical frames: the tracked point must not move.
+        assert!((next_pts[0].x - pts[0].x).abs() < 1e-3);
+        assert!((next_pts[0].y - pts[0].y).abs() < 1e-3);
+    }
+
+    // ------------------------------------------------------------------
+    // Degenerate coarse pyramid level (#145)
+    // ------------------------------------------------------------------
+
+    /// 64x64 texture that only exists at full resolution: a separable
+    /// period-3 pattern (`[60, -30, -30]` along each axis around 128).
+    ///
+    /// A period-3 sequence is a pure `2*pi/3` sinusoid plus DC, and
+    /// `pyr_down`'s `[1, 4, 6, 4, 1] / 16` kernel has gain
+    /// `(6 + 8 cos(2pi/3) + 2 cos(4pi/3)) / 16 = 1/16` at that frequency.
+    /// So level 1 keeps the pattern at 1/16 amplitude, and its gradient
+    /// matrix's minimum eigenvalue drops ~256x: 1.318 at level 0 for a 9x9
+    /// window vs ~0.005 at level 1.
+    fn full_resolution_only_texture() -> Matrix<u8> {
+        let size = 64usize;
+        let profile = [60i32, -30, -30];
+        let mut data = vec![0u8; size * size];
+        for y in 0..size {
+            for x in 0..size {
+                data[y * size + x] = (128 + profile[x % 3] + profile[y % 3]) as u8;
+            }
+        }
+        Matrix::<u8>::from_vec(size, size, 1, data)
+    }
+
+    /// Sits between the level-1 (~0.005) and level-0 (1.318) minimum
+    /// eigenvalues of `full_resolution_only_texture`, so only level 1 fails.
+    const COARSE_ONLY_EIGEN_THRESHOLD: f64 = 0.05;
+
+    /// purecv#145: a window that is degenerate only at a coarse pyramid
+    /// level must not lose the point. OpenCV (`lkpyramid.cpp`, the
+    /// `minEig < minEigThreshold || D < FLT_EPSILON` branch) only clears
+    /// `status` when the failing level is 0; at coarser levels it skips
+    /// refinement for that level and continues to the finer ones.
+    #[test]
+    fn test_lk_coarse_level_degeneracy_does_not_lose_point() {
+        let img = full_resolution_only_texture();
+        let pts = vec![Point2f::new(32.0, 32.0)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+
+        let (next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+            &img,
+            &img,
+            &pts,
+            None,
+            Size2i::new(9, 9),
+            1,
+            criteria,
+            0,
+            COARSE_ONLY_EIGEN_THRESHOLD,
+        )
+        .unwrap();
+
+        assert_eq!(
+            status[0], 1,
+            "level 1 is degenerate but level 0 is well-conditioned: the point \
+             must still be tracked, matching OpenCV"
+        );
+        assert!((next_pts[0].x - 32.0).abs() < 1e-3);
+        assert!((next_pts[0].y - 32.0).abs() < 1e-3);
+    }
+
+    /// purecv#145: when a coarse level is skipped, the flow estimate
+    /// propagated into it must carry on (x2) to the next finer level
+    /// unchanged, as OpenCV does (it has already written the propagated
+    /// guess into `nextPts` before the degeneracy check).
+    ///
+    /// Identical frames, with an initial guess of one full texture period
+    /// (3 px) to the right. Because the texture is 3-periodic, both u = 3
+    /// and u = 0 are exact zero-mismatch solutions (integer offsets,
+    /// bilinear samples on the lattice), so level 0 stays wherever it
+    /// starts. Level 1 is skipped: if the carried guess survives, level 0
+    /// starts at u = 3 and returns x = 35; if the estimate is dropped or
+    /// reset, it starts at u = 0 and returns x = 32. This doesn't depend on
+    /// the Newton step size or iteration count.
+    #[test]
+    fn test_lk_coarse_level_degeneracy_keeps_propagated_flow() {
+        let img = full_resolution_only_texture();
+        let pts = vec![Point2f::new(32.0, 32.0)];
+        let guess = vec![Point2f::new(35.0, 32.0)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+
+        let (next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+            &img,
+            &img,
+            &pts,
+            Some(&guess),
+            Size2i::new(9, 9),
+            1,
+            criteria,
+            OPTFLOW_USE_INITIAL_FLOW,
+            COARSE_ONLY_EIGEN_THRESHOLD,
+        )
+        .unwrap();
+
+        assert_eq!(status[0], 1);
+        assert!(
+            (next_pts[0].x - 35.0).abs() < 1e-3,
+            "expected x = 35.0 (guess carried through the skipped level), got {}",
+            next_pts[0].x
+        );
+        assert!((next_pts[0].y - 32.0).abs() < 1e-3);
+    }
+
+    // ------------------------------------------------------------------
+    // Tracking-window sampling for even and non-square win_size (#144)
+    // ------------------------------------------------------------------
+
+    /// 33x33 quadratic bowl `I = (x-16)^2 + (y-16)^2` (clamped to 255 far
+    /// from the centre, outside anything the tests below sample).
+    ///
+    /// Scharr of it is exact and linear: `Ix = 16 * (I(x+1) - I(x-1)) =
+    /// 64 (x-16)`, likewise `Iy = 64 (y-16)`, and bilinear interpolation of
+    /// a linear function is exact, so window sums have closed forms.
+    fn quadratic_bowl() -> Matrix<u8> {
+        quadratic_bowl_at(16, 16)
+    }
+
+    /// `quadratic_bowl` with its centre moved to `(cx, cy)`, i.e. the bowl
+    /// translated by `(cx - 16, cy - 16)`.
+    fn quadratic_bowl_at(cx: i32, cy: i32) -> Matrix<u8> {
+        let size = 33usize;
+        let mut data = vec![0u8; size * size];
+        for y in 0..size {
+            for x in 0..size {
+                let (dx, dy) = (x as i32 - cx, y as i32 - cy);
+                data[y * size + x] = (dx * dx + dy * dy).min(255) as u8;
+            }
+        }
+        Matrix::<u8>::from_vec(size, size, 1, data)
+    }
+
+    /// purecv#144: like OpenCV, the window must hold exactly
+    /// `win_size.width x win_size.height` samples at offsets
+    /// `k - (n-1)/2`, `k = 0..n` (half-integers for even `n`), and the
+    /// eigenvalue is normalised by that same `W*H`.
+    ///
+    /// On `quadratic_bowl` centred at (16, 16), `H01 = 0` by symmetry and
+    /// `H00 / (W*H) = 64^2 * mean(dx^2)`, with `mean(dx^2) = (W^2 - 1) / 12`
+    /// over those offsets. After `FLT_SCALE = 2^-20`:
+    /// `min_eigen = (min(W, H)^2 - 1) / 3072`.
+    ///
+    /// The old integer half-window sampled `2*(n/2)+1` pixels, i.e. 11 for
+    /// n = 10 and 7 for n = 6, giving 120/3072 and 48/3072 instead.
+    #[test]
+    fn test_lk_min_eigen_uses_exact_win_size_samples() {
+        let img = quadratic_bowl();
+        let pts = vec![Point2f::new(16.0, 16.0)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+
+        // (width, height, (min(W,H)^2 - 1) / 3072)
+        let cases = [
+            (9, 9, 80.0 / 3072.0),
+            (10, 10, 99.0 / 3072.0),
+            (10, 6, 35.0 / 3072.0),
+            (6, 10, 35.0 / 3072.0),
+        ];
+        for (w, h, want) in cases {
+            let (_next_pts, status, err) = calc_optical_flow_pyramid_lk(
+                &img,
+                &img,
+                &pts,
+                None,
+                Size2i::new(w, h),
+                0,
+                criteria,
+                OPTFLOW_LK_GET_MIN_EIGENVALS,
+                0.0,
+            )
+            .unwrap();
+            assert_eq!(status[0], 1, "win {w}x{h}");
+            assert!(
+                (err[0] as f64 - want).abs() < 1e-7,
+                "win {w}x{h}: expected min_eigen {want}, got {}",
+                err[0]
+            );
+        }
+    }
+
+    /// purecv#144: the tracking error (MAE) must also average over exactly
+    /// `W x H` samples at OpenCV's offsets.
+    ///
+    /// The next frame adds `10 |x - 16|` to `quadratic_bowl`, and zero
+    /// iterations keep the tracked point at (16, 16), so the error is
+    /// `10 * mean(|dx|)`: `(W^2 - 1) / (4W)` for odd W, `W / 4` for even W
+    /// (bilinear interpolation of `|x - 16|` is exact at half-integers).
+    /// The old 11-sample window for W = 10 gave 300/11 = 27.27 instead of 25.
+    #[test]
+    fn test_lk_tracking_error_uses_exact_win_size_samples() {
+        let prev = quadratic_bowl();
+        let mut next_data = prev.data.clone();
+        for y in 0..33usize {
+            for x in 0..33usize {
+                let add = 10 * (x as i32 - 16).unsigned_abs();
+                next_data[y * 33 + x] = (next_data[y * 33 + x] as u32 + add).min(255) as u8;
+            }
+        }
+        let next = Matrix::<u8>::from_vec(33, 33, 1, next_data);
+        let pts = vec![Point2f::new(16.0, 16.0)];
+        // Zero Newton iterations: the point stays put, isolating the
+        // error computation from the flow estimate.
+        let criteria = TermCriteria::new(TermType::Count, 0, 0.0);
+
+        // (width, height, 10 * mean(|dx|))
+        let cases = [
+            (9, 9, 200.0 / 9.0),
+            (10, 10, 25.0),
+            (10, 6, 25.0),
+            (6, 10, 15.0),
+        ];
+        for (w, h, want) in cases {
+            let (next_pts, status, err) = calc_optical_flow_pyramid_lk(
+                &prev,
+                &next,
+                &pts,
+                None,
+                Size2i::new(w, h),
+                0,
+                criteria,
+                0,
+                0.0,
+            )
+            .unwrap();
+            assert_eq!(status[0], 1, "win {w}x{h}");
+            assert_eq!((next_pts[0].x, next_pts[0].y), (16.0, 16.0), "win {w}x{h}");
+            assert!(
+                (err[0] - want).abs() < 1e-4,
+                "win {w}x{h}: expected error {want}, got {}",
+                err[0]
+            );
+        }
+    }
+
+    /// OpenCV asserts `winSize.width > 2 && winSize.height > 2`
+    /// (`lkpyramid.cpp`); smaller windows must be rejected rather than
+    /// producing an empty sample set (and a NaN eigenvalue) for `<= 0`.
+    #[test]
+    fn test_lk_rejects_win_size_below_3() {
+        let img = quadratic_bowl();
+        let pts = vec![Point2f::new(16.0, 16.0)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+        for (w, h) in [(2, 5), (5, 2), (0, 0), (-3, 5)] {
+            let res = calc_optical_flow_pyramid_lk(
+                &img,
+                &img,
+                &pts,
+                None,
+                Size2i::new(w, h),
+                0,
+                criteria,
+                0,
+                0.0,
+            );
+            assert!(res.is_err(), "win {w}x{h} must be rejected");
+        }
+        let ok = calc_optical_flow_pyramid_lk(
+            &img,
+            &img,
+            &pts,
+            None,
+            Size2i::new(3, 3),
+            0,
+            criteria,
+            0,
+            0.0,
+        );
+        assert!(ok.is_ok(), "win 3x3 is the smallest valid size");
+    }
+
+    // ------------------------------------------------------------------
+    // Newton step scale (#149)
+    // ------------------------------------------------------------------
+
+    /// purecv#149: a single LK Newton step must be the full Gauss-Newton
+    /// step, not 1/32 of it.
+    ///
+    /// Next frame = `quadratic_bowl` translated by an integer `(dx, dy)`.
+    /// At the first iteration (u = v = 0) every sample is on the lattice,
+    /// so with window offsets `(X, Y)`:
+    /// `It = (X-dx)^2 + (Y-dy)^2 - X^2 - Y^2 = -2 dx X - 2 dy Y + dx^2 + dy^2`
+    /// and the Scharr gradients are `Ix = 64 X`, `Iy = 64 Y`. Over a
+    /// symmetric window `sum X = sum X*Y = 0`, so `H = 4096 diag(sum X^2,
+    /// sum Y^2)` and `b = -sum [Ix, Iy] * It = 128 (dx sum X^2, dy sum Y^2)`
+    /// in raw intensity units. OpenCV carries `It` at the derivatives' x32
+    /// scale, so `b` gains a factor 32 and the step is
+    /// `32 * 128 / 4096 * (dx, dy) = (dx, dy)` exactly. Without the x32 it
+    /// is `(dx, dy) / 32`.
+    #[test]
+    fn test_lk_single_newton_step_is_exact_on_quadratic_bowl() {
+        let prev = quadratic_bowl();
+        let pts = vec![Point2f::new(16.0, 16.0)];
+        let one_iteration = TermCriteria::new(TermType::Count, 1, 0.0);
+
+        for (dx, dy) in [(1, 0), (0, -1), (2, 1)] {
+            let next = quadratic_bowl_at(16 + dx, 16 + dy);
+            let (next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+                &prev,
+                &next,
+                &pts,
+                None,
+                Size2i::new(9, 9),
+                0,
+                one_iteration,
+                0,
+                0.0,
+            )
+            .unwrap();
+
+            assert_eq!(status[0], 1, "shift ({dx}, {dy})");
+            let (u, v) = (next_pts[0].x - 16.0, next_pts[0].y - 16.0);
+            assert!(
+                (u - dx as f32).abs() < 1e-4 && (v - dy as f32).abs() < 1e-4,
+                "shift ({dx}, {dy}): one Newton step gave ({u}, {v})"
+            );
+        }
+    }
+
+    /// Smooth texture for end-to-end accuracy checks, evaluated at
+    /// `(x - sx, y - sy)` so `(sx, sy)` is an exact sub-pixel translation,
+    /// then rounded to u8.
+    fn smooth_texture(size: usize, sx: f32, sy: f32) -> Matrix<u8> {
+        let mut data = vec![0u8; size * size];
+        for y in 0..size {
+            for x in 0..size {
+                let (xf, yf) = (x as f32 - sx, y as f32 - sy);
+                let v = 128.0
+                    + 50.0 * (0.15 * xf).sin()
+                    + 50.0 * (0.13 * yf).cos()
+                    + 20.0 * (0.1 * (xf + yf)).sin();
+                data[y * size + x] = v.round() as u8;
+            }
+        }
+        Matrix::<u8>::from_vec(size, size, 1, data)
+    }
+
+    /// purecv#149: with OpenCV's `calcOpticalFlowPyrLK` defaults (21x21
+    /// window, maxLevel 3, 30 iterations / epsilon 0.01, minEigThreshold
+    /// 1e-4), a known sub-pixel translation of a smooth texture must be
+    /// recovered to within 0.02 px. Before the fix each Newton step was
+    /// 1/32 of the true step, so a 1 px shift came out as ~0.7 px.
+    #[test]
+    fn test_lk_recovers_subpixel_shift_with_opencv_defaults() {
+        let (sx, sy) = (0.6f32, -0.4f32);
+        let prev = smooth_texture(128, 0.0, 0.0);
+        let next = smooth_texture(128, sx, sy);
+        let pts = vec![Point2f::new(64.0, 64.0)];
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+
+        let (next_pts, status, _err) = calc_optical_flow_pyramid_lk(
+            &prev,
+            &next,
+            &pts,
+            None,
+            Size2i::new(21, 21),
+            3,
+            criteria,
+            0,
+            1e-4,
+        )
+        .unwrap();
+
+        assert_eq!(status[0], 1);
+        let (u, v) = (next_pts[0].x - 64.0, next_pts[0].y - 64.0);
+        assert!(
+            (u - sx).abs() < 0.02 && (v - sy).abs() < 0.02,
+            "expected flow ({sx}, {sy}), got ({u}, {v})"
+        );
     }
 }
