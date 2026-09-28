@@ -38,15 +38,25 @@ use super::bit_pattern_31::BIT_PATTERN_31;
 use super::fast::{FastFeatureDetector, FastType};
 use super::keypoint::KeyPoint;
 use crate::core::error::{PureCvError, Result};
-use crate::core::types::Size;
+use crate::core::types::{BorderTypes, Size, Size2i};
+use crate::core::utils::border_interpolate;
 use crate::core::Matrix;
-use crate::imgproc::resize;
+use crate::imgproc::{gaussian_blur, resize};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 #[cfg(feature = "simd")]
 use pulp::Arch;
+
+// Counts calls to `build_orb_pyramid` in tests, so the golden and behaviour tests can assert
+// `detect_and_compute` builds the scale pyramid exactly once instead of once per `detect`/
+// `compute` call. Thread-local so parallel test threads don't interfere with each other;
+// `build_orb_pyramid` always runs on the caller's thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PYRAMID_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// The type of keypoint scoring for ORB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +70,22 @@ pub enum ScoreType {
 /// Oriented FAST and Rotated BRIEF (ORB) keypoint detector and descriptor extractor.
 ///
 /// Ref: https://docs.opencv.org/4.10.0/db/d95/classcv_1_1ORB.html
+///
+/// Not every OpenCV `ORB::create` parameter is implemented. Unsupported values are rejected
+/// with [`PureCvError::InvalidInput`] by `detect`, `compute` and `detect_and_compute`, rather
+/// than being silently ignored or producing wrong or undefined results:
+///
+/// | Parameter        | Status                                                                                                        |
+/// |------------------|----------------------------------------------------------------------------------------------------------------|
+/// | `nfeatures`      | Honoured.                                                                                                       |
+/// | `scale_factor`   | Honoured.                                                                                                       |
+/// | `nlevels`        | Honoured.                                                                                                       |
+/// | `edge_threshold` | Honoured.                                                                                                       |
+/// | `first_level`    | Only `0` is supported.                                                                                          |
+/// | `wta_k`          | Only `2` is supported. Applies only to descriptor extraction (`compute`/`detect_and_compute`); `detect` does not use it, matching OpenCV. |
+/// | `score_type`     | Honoured.                                                                                                       |
+/// | `patch_size`     | Must be at least `2` for detection (orientation); descriptor extraction additionally requires exactly `31`.    |
+/// | `fast_threshold` | Honoured.                                                                                                       |
 #[derive(Debug, Clone)]
 pub struct Orb {
     nfeatures: usize,
@@ -90,6 +116,38 @@ impl Default for Orb {
     }
 }
 
+/// Raises `base` to the `n`-th power by repeated multiplication rather than `f64::powi`.
+///
+/// `f64::powi` uses exponentiation-by-squaring, whose multiplication order (and therefore
+/// last-bit rounding) is not guaranteed to match across platforms. Repeated multiplication in a
+/// fixed order is. Used by [`level_scale`] and `Orb::get_features_per_level`.
+fn pow_f64(base: f64, n: i32) -> f64 {
+    let mut result = 1.0f64;
+    for _ in 0..n {
+        result *= base;
+    }
+    result
+}
+
+/// Computes the ORB pyramid scale factor for a given level.
+///
+/// Matches OpenCV's `getScale`, which computes `(float)pow((double)scale_factor, level)`.
+/// Repeated `f64` multiplication (rather than `f64::powi`) is used so the result is identical
+/// across platforms, then rounded once to `f32`.
+pub(crate) fn level_scale(scale_factor: f32, level: i32) -> f32 {
+    pow_f64(scale_factor as f64, level) as f32
+}
+
+/// Smooths a pyramid level before steered BRIEF sampling.
+///
+/// Matches OpenCV's ORB, which blurs each level it samples descriptors from with a 7x7 kernel,
+/// sigma 2, `BORDER_REFLECT_101` (ref: orb.cpp:1224-1231), before computing descriptors. Only
+/// [`Orb::compute_in_pyramid`] calls this; keypoint detection (FAST, Harris, orientation) always
+/// uses the unblurred pyramid.
+fn blur_for_descriptors(level: &Matrix<u8>) -> Result<Matrix<u8>> {
+    gaussian_blur(level, Size2i::new(7, 7), 2.0, 2.0, BorderTypes::Reflect101)
+}
+
 impl Orb {
     /// Creates a new ORB instance with customizable parameters.
     ///
@@ -97,10 +155,18 @@ impl Orb {
     /// * `scale_factor` - Pyramid decimation ratio, greater than 1.
     /// * `nlevels` - The number of pyramid levels.
     /// * `edge_threshold` - This is size of the border where the features are not detected.
-    /// * `first_level` - The level of pyramid to put source image to.
-    /// * `wta_k` - The number of points that produce each element of the oriented BRIEF descriptor.
+    /// * `first_level` - The level of pyramid to put source image to. Only `0` is supported;
+    ///   any other value makes `detect`, `compute` and `detect_and_compute` return
+    ///   [`PureCvError::InvalidInput`].
+    /// * `wta_k` - The number of points that produce each element of the oriented BRIEF
+    ///   descriptor. Only `2` is supported: `compute` and `detect_and_compute` return
+    ///   [`PureCvError::InvalidInput`] for any other value, while `detect` does not use this
+    ///   parameter and accepts any value, matching OpenCV.
     /// * `score_type` - The algorithm used to rank the features.
-    /// * `patch_size` - Size of the patch used by the oriented BRIEF descriptor.
+    /// * `patch_size` - Size of the patch used by the oriented BRIEF descriptor. Must be at
+    ///   least `2`; descriptor extraction additionally requires exactly `31`, the size the
+    ///   compiled sampling pattern is generated for. Other values make the corresponding
+    ///   methods return [`PureCvError::InvalidInput`].
     /// * `fast_threshold` - The FAST threshold.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -173,6 +239,9 @@ impl Orb {
     }
 
     /// Sets the first level of the pyramid.
+    ///
+    /// Only `0` (the default) is supported; any other value makes `detect`, `compute` and
+    /// `detect_and_compute` return [`PureCvError::InvalidInput`].
     pub fn set_first_level(&mut self, first_level: usize) {
         self.first_level = first_level;
     }
@@ -183,6 +252,10 @@ impl Orb {
     }
 
     /// Sets WTA_K parameter.
+    ///
+    /// Only `2` (the default) is supported for descriptor extraction: `compute` and
+    /// `detect_and_compute` return [`PureCvError::InvalidInput`] for any other value.
+    /// `detect` does not use this parameter and accepts any value, matching OpenCV.
     pub fn set_wta_k(&mut self, wta_k: usize) {
         self.wta_k = wta_k;
     }
@@ -203,6 +276,11 @@ impl Orb {
     }
 
     /// Sets the patch size.
+    ///
+    /// Must be at least `2` for detection (orientation); descriptor extraction additionally
+    /// requires exactly `31` (the default), the size the compiled sampling pattern is
+    /// generated for. Other values make the corresponding methods return
+    /// [`PureCvError::InvalidInput`].
     pub fn set_patch_size(&mut self, patch_size: usize) {
         self.patch_size = patch_size;
     }
@@ -223,7 +301,7 @@ impl Orb {
         let mut sum_features = 0;
         let factor = 1.0 / self.scale_factor;
         let ndesired_first = self.nfeatures as f64 * (1.0 - factor as f64)
-            / (1.0 - (factor as f64).powi(self.nlevels as i32));
+            / (1.0 - pow_f64(factor as f64, self.nlevels as i32));
         let mut ndesired = ndesired_first;
         for item in nfeatures_per_level.iter_mut().take(self.nlevels - 1) {
             *item = ndesired.round() as usize;
@@ -235,17 +313,74 @@ impl Orb {
         nfeatures_per_level
     }
 
+    /// Validates the parameters used by keypoint detection.
+    ///
+    /// `first_level` must be `0` and `patch_size` must be at least `2`; every other parameter
+    /// is honoured for any value. See the [`Orb`] struct docs for the full parameter table.
+    fn check_detect_params(&self) -> Result<()> {
+        if self.first_level != 0 {
+            return Err(PureCvError::InvalidInput(format!(
+                "ORB first_level = {} is not supported: only first_level = 0 is implemented",
+                self.first_level
+            )));
+        }
+        if self.patch_size < 2 {
+            return Err(PureCvError::InvalidInput(format!(
+                "ORB patch_size = {} is not supported: patch_size must be at least 2",
+                self.patch_size
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validates the parameters used by descriptor extraction, in addition to
+    /// [`Orb::check_detect_params`].
+    ///
+    /// `wta_k` must be `2` and `patch_size` must be exactly `31`. See the [`Orb`] struct docs
+    /// for the full parameter table.
+    fn check_descriptor_params(&self) -> Result<()> {
+        self.check_detect_params()?;
+        if self.wta_k != 2 {
+            return Err(PureCvError::InvalidInput(format!(
+                "ORB wta_k = {} is not supported: only WTA_K = 2 is implemented (OpenCV also accepts 3 and 4)",
+                self.wta_k
+            )));
+        }
+        if self.patch_size != 31 {
+            return Err(PureCvError::InvalidInput(format!(
+                "ORB patch_size = {} is not supported for descriptors: only patch_size = 31 is implemented",
+                self.patch_size
+            )));
+        }
+        Ok(())
+    }
+
     /// Detects keypoints in an image.
     ///
     /// * `image` - Grayscale input image (matrix).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PureCvError::InvalidInput`] if `image` is not single-channel, if
+    /// `first_level` is not `0`, or if `patch_size` is less than `2`.
     pub fn detect(&self, image: &Matrix<u8>) -> Result<Vec<KeyPoint>> {
         if image.channels != 1 {
             return Err(PureCvError::InvalidInput(
                 "ORB keypoint detection requires a single-channel grayscale image".to_string(),
             ));
         }
+        self.check_detect_params()?;
 
         let pyramid = build_orb_pyramid(image, self.nlevels, self.scale_factor)?;
+        self.detect_in_pyramid(&pyramid)
+    }
+
+    /// Detects keypoints from an already-built scale pyramid.
+    ///
+    /// Callers are responsible for validating the image and parameters (see
+    /// [`Orb::check_detect_params`]) and for building `pyramid` with [`build_orb_pyramid`]
+    /// beforehand; this does not repeat that validation.
+    fn detect_in_pyramid(&self, pyramid: &[Matrix<u8>]) -> Result<Vec<KeyPoint>> {
         let nfeatures_per_level = self.get_features_per_level();
         let u_max = precompute_umax(self.patch_size / 2);
 
@@ -270,17 +405,16 @@ impl Orb {
 
             // Harris corner response scoring if requested
             if self.score_type == ScoreType::Harris {
-                let harris = crate::imgproc::corner_harris(
-                    &pyramid[level],
-                    3,
-                    3,
-                    0.04,
-                    crate::core::types::BorderTypes::Reflect101,
-                )?;
                 for kp in level_kpts.iter_mut() {
                     let rx = kp.pt.x.round() as usize;
                     let ry = kp.pt.y.round() as usize;
-                    kp.response = harris.get(ry, rx, 0).copied().unwrap_or(0.0);
+                    debug_assert!(
+                        rx < pyramid[level].cols && ry < pyramid[level].rows,
+                        "FAST keypoint ({rx}, {ry}) is outside pyramid level {level} ({}x{})",
+                        pyramid[level].cols,
+                        pyramid[level].rows
+                    );
+                    kp.response = harris_at(&pyramid[level], rx, ry);
                 }
             }
 
@@ -297,7 +431,7 @@ impl Orb {
             }
 
             // Assign intensity centroid orientation and scale up coordinates
-            let scale = self.scale_factor.powi(level as i32);
+            let scale = level_scale(self.scale_factor, level as i32);
             for kp in level_kpts.iter_mut() {
                 let angle = compute_orientation(
                     &pyramid[level],
@@ -333,14 +467,58 @@ impl Orb {
     ///
     /// * `image` - Grayscale input image (matrix).
     /// * `keypoints` - Detected keypoints for which to compute descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PureCvError::InvalidInput`] if `image` is not single-channel, if
+    /// `first_level` is not `0`, if `wta_k` is not `2`, or if `patch_size` is not `31`.
     pub fn compute(&self, image: &Matrix<u8>, keypoints: &[KeyPoint]) -> Result<Matrix<u8>> {
         if image.channels != 1 {
             return Err(PureCvError::InvalidInput(
                 "ORB descriptor extraction requires a single-channel grayscale image".to_string(),
             ));
         }
+        self.check_descriptor_params()?;
 
         let pyramid = build_orb_pyramid(image, self.nlevels, self.scale_factor)?;
+        self.compute_in_pyramid(&pyramid, keypoints)
+    }
+
+    /// Computes keypoint descriptors from an already-built scale pyramid.
+    ///
+    /// Callers are responsible for validating the image and parameters (see
+    /// [`Orb::check_descriptor_params`]) and for building `pyramid` with [`build_orb_pyramid`]
+    /// beforehand; this does not repeat that validation.
+    ///
+    /// Like OpenCV, this blurs each pyramid level a keypoint refers to (7x7, sigma 2,
+    /// `BORDER_REFLECT_101`, see [`blur_for_descriptors`]) before sampling steered BRIEF from it;
+    /// the unblurred `pyramid` passed in is only used to pick which levels need blurring.
+    fn compute_in_pyramid(
+        &self,
+        pyramid: &[Matrix<u8>],
+        keypoints: &[KeyPoint],
+    ) -> Result<Matrix<u8>> {
+        // Validate every keypoint's octave up front, before blurring any level.
+        for kp in keypoints {
+            let level = kp.octave;
+            if level < 0 || level as usize >= self.nlevels {
+                return Err(PureCvError::InvalidInput(format!(
+                    "Keypoint octave {level} is larger than ORB nlevels {}",
+                    self.nlevels
+                )));
+            }
+        }
+
+        // Blur only the levels at least one keypoint refers to, once per level. Detection
+        // (FAST/Harris/orientation) runs on the unblurred `pyramid` and never sees this.
+        let mut blurred_levels: Vec<Option<Matrix<u8>>> = vec![None; pyramid.len()];
+        for kp in keypoints {
+            let level = kp.octave as usize;
+            if blurred_levels[level].is_none() {
+                blurred_levels[level] = Some(blur_for_descriptors(&pyramid[level])?);
+            }
+        }
+
         let mut descriptors = Matrix::<u8>::new(keypoints.len(), 32, 1);
 
         #[cfg(feature = "parallel")]
@@ -352,19 +530,18 @@ impl Orb {
                 .try_for_each(|(i, row_desc)| -> Result<()> {
                     let kp = &keypoints[i];
                     let level = kp.octave;
-                    if level < 0 || level as usize >= self.nlevels {
-                        return Err(PureCvError::InvalidInput(format!(
-                            "Keypoint octave {level} is larger than ORB nlevels {}",
-                            self.nlevels
-                        )));
-                    }
-                    let scale = self.scale_factor.powi(level);
+                    let scale = level_scale(self.scale_factor, level);
                     let mut level_kp = kp.clone();
                     level_kp.pt.x /= scale;
                     level_kp.pt.y /= scale;
 
+                    let level_image = blurred_levels[level as usize].as_ref().ok_or_else(|| {
+                        PureCvError::InvalidInput(format!(
+                            "ORB pyramid level {level} was not blurred before descriptor extraction"
+                        ))
+                    })?;
                     let desc_bytes = compute_orb_descriptor(
-                        &pyramid[level as usize],
+                        level_image,
                         &level_kp,
                         self.patch_size,
                         &BIT_PATTERN_31,
@@ -383,19 +560,18 @@ impl Orb {
                 .try_for_each(|(i, row_desc)| -> Result<()> {
                     let kp = &keypoints[i];
                     let level = kp.octave;
-                    if level < 0 || level as usize >= self.nlevels {
-                        return Err(PureCvError::InvalidInput(format!(
-                            "Keypoint octave {level} is larger than ORB nlevels {}",
-                            self.nlevels
-                        )));
-                    }
-                    let scale = self.scale_factor.powi(level);
+                    let scale = level_scale(self.scale_factor, level);
                     let mut level_kp = kp.clone();
                     level_kp.pt.x /= scale;
                     level_kp.pt.y /= scale;
 
+                    let level_image = blurred_levels[level as usize].as_ref().ok_or_else(|| {
+                        PureCvError::InvalidInput(format!(
+                            "ORB pyramid level {level} was not blurred before descriptor extraction"
+                        ))
+                    })?;
                     let desc_bytes = compute_orb_descriptor(
-                        &pyramid[level as usize],
+                        level_image,
                         &level_kp,
                         self.patch_size,
                         &BIT_PATTERN_31,
@@ -411,9 +587,22 @@ impl Orb {
     /// Detects keypoints and computes their descriptors in one pass.
     ///
     /// * `image` - Grayscale input image (matrix).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PureCvError::InvalidInput`] under the same conditions as [`Orb::compute`]
+    /// (descriptor extraction has the stricter parameter requirements of the two).
     pub fn detect_and_compute(&self, image: &Matrix<u8>) -> Result<(Vec<KeyPoint>, Matrix<u8>)> {
-        let keypoints = self.detect(image)?;
-        let descriptors = self.compute(image, &keypoints)?;
+        if image.channels != 1 {
+            return Err(PureCvError::InvalidInput(
+                "ORB keypoint detection requires a single-channel grayscale image".to_string(),
+            ));
+        }
+        self.check_descriptor_params()?;
+
+        let pyramid = build_orb_pyramid(image, self.nlevels, self.scale_factor)?;
+        let keypoints = self.detect_in_pyramid(&pyramid)?;
+        let descriptors = self.compute_in_pyramid(&pyramid, &keypoints)?;
         Ok((keypoints, descriptors))
     }
 }
@@ -428,6 +617,9 @@ pub fn build_orb_pyramid(
     nlevels: usize,
     scale_factor: f32,
 ) -> Result<Vec<Matrix<u8>>> {
+    #[cfg(test)]
+    PYRAMID_BUILDS.with(|c| c.set(c.get() + 1));
+
     if image.channels != 1 {
         return Err(PureCvError::InvalidInput(
             "ORB pyramid construction requires a single-channel grayscale image".to_string(),
@@ -448,8 +640,8 @@ pub fn build_orb_pyramid(
     pyramid.push(image.clone());
 
     for level in 1..nlevels {
-        let level_scale = scale_factor.powi(level as i32);
-        let inv_scale = 1.0 / level_scale;
+        let scale = level_scale(scale_factor, level as i32);
+        let inv_scale = 1.0 / scale;
 
         let cols_level = (image.cols as f32 * inv_scale).round() as usize;
         let rows_level = (image.rows as f32 * inv_scale).round() as usize;
@@ -467,6 +659,68 @@ pub fn build_orb_pyramid(
     }
 
     Ok(pyramid)
+}
+
+/// Computes the Harris corner response at a single pixel.
+///
+/// Bit-identical to `corner_harris(img, 3, 3, 0.04, BorderTypes::Reflect101)` sampled at row
+/// `y`, column `x`, without materializing the full response map. ORB scores only a few hundred
+/// FAST keypoints per level, so evaluating the response at just those points (rather than
+/// running the box-filtered Sobel over every pixel of the level) avoids most of the work.
+///
+/// Ref: https://github.com/opencv/opencv/blob/4.10.0/modules/imgproc/src/corner.cpp
+///
+/// # Preconditions
+///
+/// `img.channels == 1`, `x < img.cols`, `y < img.rows`.
+pub(crate) fn harris_at(img: &Matrix<u8>, x: usize, y: usize) -> f32 {
+    let rows = img.rows as i32;
+    let cols = img.cols as i32;
+    let cx = x as i32;
+    let cy = y as i32;
+    let data = &img.data;
+
+    // Reflect-101 sample of the (already border-extended) source image.
+    let pixel =
+        |yy: i32, xx: i32| -> i64 { data[yy as usize * cols as usize + xx as usize] as i64 };
+
+    let mut sxx: i64 = 0;
+    let mut sxy: i64 = 0;
+    let mut syy: i64 = 0;
+
+    // 3x3 box average of the Sobel derivative products, matching `compute_structure_tensor`'s
+    // box_filter(..., Reflect101) over the Ixx/Ixy/Iyy maps.
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let by = border_interpolate(cy + dy, rows, BorderTypes::Reflect101);
+            let bx = border_interpolate(cx + dx, cols, BorderTypes::Reflect101);
+
+            // 3x3 integer Sobel at (by, bx), with its own Reflect101 border handling.
+            let ym = border_interpolate(by - 1, rows, BorderTypes::Reflect101);
+            let yp = border_interpolate(by + 1, rows, BorderTypes::Reflect101);
+            let xm = border_interpolate(bx - 1, cols, BorderTypes::Reflect101);
+            let xp = border_interpolate(bx + 1, cols, BorderTypes::Reflect101);
+
+            let gx = (pixel(ym, xp) - pixel(ym, xm))
+                + 2 * (pixel(by, xp) - pixel(by, xm))
+                + (pixel(yp, xp) - pixel(yp, xm));
+            let gy = (pixel(yp, xm) - pixel(ym, xm))
+                + 2 * (pixel(yp, bx) - pixel(ym, bx))
+                + (pixel(yp, xp) - pixel(ym, xp));
+
+            sxx += gx * gx;
+            sxy += gx * gy;
+            syy += gy * gy;
+        }
+    }
+
+    let a = (sxx as f64 * (1.0 / 9.0)) as f32;
+    let b = (sxy as f64 * (1.0 / 9.0)) as f32;
+    let c = (syy as f64 * (1.0 / 9.0)) as f32;
+    let k = 0.04f64 as f32;
+    let det = a * c - b * b;
+    let tr = a + c;
+    det - k * tr * tr
 }
 
 /// Precomputes the row end coordinates for a circular patch of a given half size.
@@ -601,9 +855,15 @@ pub fn compute_orientation(
         }
     }
 
-    let mut angle = (m_01 as f32).atan2(m_10 as f32) * 180.0 / std::f32::consts::PI;
-    if angle < 0.0 {
-        angle += 360.0;
+    // f64 atan2/to_degrees, rounded to f32 once, keeps this platform-independent: f32::atan2
+    // itself can differ in the last bit between platforms.
+    let mut angle_deg = (m_01 as f64).atan2(m_10 as f64).to_degrees();
+    if angle_deg < 0.0 {
+        angle_deg += 360.0;
+    }
+    let mut angle = angle_deg as f32;
+    if angle >= 360.0 {
+        angle -= 360.0;
     }
 
     Ok(angle)
@@ -612,10 +872,26 @@ pub fn compute_orientation(
 /// Computes the 32-byte steered BRIEF descriptor for a keypoint on a specific image.
 ///
 /// Ref: https://github.com/opencv/opencv/blob/4.10.0/modules/features2d/src/orb.cpp#L220
+///
+/// `image` is sampled as given; it is not blurred by this function. `Orb::compute` blurs each
+/// pyramid level it samples (7x7, sigma 2, `BORDER_REFLECT_101`) before calling this, matching
+/// OpenCV. Callers of this function directly who want OpenCV-parity descriptors must pass an
+/// already-blurred `image` (see [`gaussian_blur`](crate::imgproc::gaussian_blur) with those
+/// parameters).
+///
+/// * `patch_size` - Must be exactly `31`; the compiled sampling `pattern` (e.g.
+///   [`BIT_PATTERN_31`]) is generated for a 31x31 patch.
+/// * `pattern` - The BRIEF sampling pattern: 4 `i8` coordinates (`x1, y1, x2, y2`) per bit,
+///   256 bits, so it must have at least 1024 entries.
+///
+/// # Errors
+///
+/// Returns [`PureCvError::InvalidInput`] if `image` is not single-channel, if `patch_size` is
+/// not `31`, or if `pattern` has fewer than 1024 entries.
 pub fn compute_orb_descriptor(
     image: &Matrix<u8>,
     keypoint: &KeyPoint,
-    _patch_size: usize,
+    patch_size: usize,
     pattern: &[i8],
 ) -> Result<[u8; 32]> {
     if image.channels != 1 {
@@ -623,10 +899,23 @@ pub fn compute_orb_descriptor(
             "Steered BRIEF requires a single-channel grayscale image".to_string(),
         ));
     }
+    if patch_size != 31 {
+        return Err(PureCvError::InvalidInput(format!(
+            "ORB patch_size = {patch_size} is not supported for descriptors: only patch_size = 31 is implemented"
+        )));
+    }
+    if pattern.len() < 1024 {
+        return Err(PureCvError::InvalidInput(format!(
+            "ORB descriptor sampling pattern has {} entries, but at least 1024 are required (256 bit comparisons x 4 coordinates each)",
+            pattern.len()
+        )));
+    }
 
-    let angle_rad = keypoint.angle * std::f32::consts::PI / 180.0;
-    let cos_a = angle_rad.cos();
-    let sin_a = angle_rad.sin();
+    // f64 cos/sin, rounded to f32 once, keeps this platform-independent: f32::cos/f32::sin can
+    // differ by 1 ULP between platforms for about 1.3% of angles.
+    let angle_rad = (keypoint.angle as f64).to_radians();
+    let cos_a = angle_rad.cos() as f32;
+    let sin_a = angle_rad.sin() as f32;
 
     let cx = keypoint.pt.x.round() as i32;
     let cy = keypoint.pt.y.round() as i32;
