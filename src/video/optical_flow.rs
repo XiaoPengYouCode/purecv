@@ -332,21 +332,20 @@ impl TrackingWindow {
 /// outside the true level bounds (`bilinear_interp_const_zero`).
 ///
 /// `BORDER_REFLECT_101` index mapping (`gfedcb|abcdefgh|gfedcba`): the edge
-/// pixel is not duplicated.
-fn reflect101_index(i: i32, n: i32) -> usize {
+/// pixel is not duplicated. The input is reduced modulo the reflection
+/// period first, so absurd coordinates terminate in O(1) instead of
+/// spinning the loop ~|i|/n times.
+pub(crate) fn reflect101_index(i: i32, n: i32) -> usize {
     if n <= 1 {
         return 0;
     }
-    let mut v = i;
-    loop {
-        if v < 0 {
-            v = -v;
-        } else if v >= n {
-            v = 2 * n - 2 - v;
-        } else {
-            return v as usize;
-        }
+    let period = (2 * n - 2) as i64;
+    let mut v = (i as i64).rem_euclid(period);
+    // v in [0, 2n-3]: fold the second half back.
+    if v >= n as i64 {
+        v = period - v;
     }
+    v as usize
 }
 
 /// Image-level sampling with `BORDER_REFLECT_101`, matching a winSize-padded
@@ -533,12 +532,27 @@ fn lk_single_level(
     let bounds = LkBounds {
         px: px as f64,
         py: py as f64,
+        half_w: (win.width - 1) as f64 * 0.5,
+        half_h: (win.height - 1) as f64 * 0.5,
         min_x: -(win.width as f64),
         max_x: next.cols as f64,
         min_y: -(win.height as f64),
         max_y: next.rows as f64,
         is_finest,
     };
+    // Template window top-left check, mirroring OpenCV's `iprevPt =
+    // floor(prevPt - halfWin)` gate: a template that starts off-image skips
+    // this level without grinding 30 Newton iterations on reflected samples
+    // (lost only at the finest level).
+    let tx = (px - win.half_w).floor();
+    let ty = (py - win.half_h).floor();
+    if tx < -(win.width as f32)
+        || tx >= next.cols as f32
+        || ty < -(win.height as f32)
+        || ty >= next.rows as f32
+    {
+        return (init_u, init_v, 1.0, !is_finest);
+    }
 
     #[cfg(feature = "simd")]
     {
@@ -615,13 +629,18 @@ fn lk_single_level(
 /// on reflected samples forever with `status = 1` (see #163).
 #[derive(Clone, Copy)]
 pub(crate) struct LkBounds {
-    /// Template x in level coordinates; the search centre is `px + u`.
+    /// Template x in level coordinates; the search window's top-left corner
+    /// is `px + u - half_w` (OpenCV subtracts `halfWin` before flooring).
     pub px: f64,
-    /// Template y in level coordinates; the search centre is `py + v`.
+    /// Template y in level coordinates.
     pub py: f64,
+    /// Half window width.
+    pub half_w: f64,
+    /// Half window height.
+    pub half_h: f64,
     /// Negative window width (OpenCV's `-winSize.width`).
     pub min_x: f64,
-    /// Level width (OpenCV's `J.cols`).
+    /// Level width (OpenCV's `J.cols`, unpadded ROI width).
     pub max_x: f64,
     /// Negative window height.
     pub min_y: f64,
@@ -673,8 +692,12 @@ pub(crate) fn lk_iterate(
 
     for iter in 0..max_iters {
         if let Some(b) = bounds {
-            let nx = (b.px + u).floor();
-            let ny = (b.py + v).floor();
+            // Window top-left corner, like OpenCV's `inextPt = floor(nextPt
+            // - halfWin)` (`lkpyramid.cpp`). Checking the centre instead is
+            // off by half a window: it wrongly rejects edge features on the
+            // right/bottom and wrongly admits them on the left/top.
+            let nx = (b.px + u - b.half_w).floor();
+            let ny = (b.py + v - b.half_h).floor();
             if nx < b.min_x || nx >= b.max_x || ny < b.min_y || ny >= b.max_y {
                 tracked = !b.is_finest;
                 break;
