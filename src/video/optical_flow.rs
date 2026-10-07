@@ -320,7 +320,8 @@ impl TrackingWindow {
 }
 
 /// Border handling for LK window sampling, mirroring OpenCV's
-/// `calcOpticalFlowPyrLK` (`tracking.hpp:125-129`, `lkpyramid.cpp`): image
+/// `calcOpticalFlowPyrLK` (defaults in [`tracking.hpp:121-125`](https://github.com/opencv/opencv/blob/4.10.0/modules/video/include/opencv2/video/tracking.hpp#L121-L125),
+/// padding in [`lkpyramid.cpp:726-807`](https://github.com/opencv/opencv/blob/4.10.0/modules/video/src/lkpyramid.cpp#L726-L807)): image
 /// levels are padded by the window size with `BORDER_REFLECT_101`, derivative
 /// levels with `BORDER_CONSTANT` (zero).
 ///

@@ -1290,7 +1290,7 @@ mod video_tests {
     /// purecv#163: coarse pyramid levels must not fabricate gradients from
     /// clamped window overhang. 21x21 window, 4 levels, zero-init initial
     /// flow — pre-fix this gave rmse 28.8px with a +4.7px systematic y bias
-    /// on shift (10,0); OpenCV 5.0.0 scores rmse 0.0px on identical inputs.
+    /// on shift (10,0); OpenCV 4.10.0 scores rmse 0.0px on identical inputs.
     /// The gate is on the mean error (2.5px), matching OpenCV's own spread
     /// (worst mean component 0.42px across the same shift set).
     // miri: 150-point pyramidal LK — too slow under interpretation.
