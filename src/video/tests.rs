@@ -624,7 +624,7 @@ mod video_tests {
     #[test]
     fn test_lk_iterate_applies_oscillation_half_step() {
         let mut call = 0;
-        let (u, v) = lk_iterate(
+        let (u, v, tracked) = lk_iterate(
             1.0,  // h00
             0.0,  // h01
             1.0,  // h11
@@ -633,6 +633,7 @@ mod video_tests {
             0.0,  // init_v
             10,   // max_iters
             1e-9, // eps: tiny, never satisfied by these steps
+            None, // bounds: pin iteration math without image geometry
             |_u, _v| {
                 call += 1;
                 match call {
@@ -651,6 +652,7 @@ mod video_tests {
             (v - 0.25).abs() < 1e-9,
             "expected v = 0.25 (oscillation half-step fallback), got {v}"
         );
+        assert!(tracked, "unbounded walk must stay tracked");
     }
 
     /// Pins the determinant-degeneracy guard to OpenCV's scale. purecv#142:
@@ -1137,5 +1139,127 @@ mod video_tests {
             (u - sx).abs() < 0.02 && (v - sy).abs() < 0.02,
             "expected flow ({sx}, {sy}), got ({u}, {v})"
         );
+    }
+
+    /// Non-periodic pseudo-random cell texture (xorshift cells 4-12px,
+    /// 3x3 mean blur) with integer shifts, on a 150-point grid avoiding the
+    /// outer 40px border — the fixture behind purecv#163.
+    fn cell_texture(w: usize, h: usize) -> Matrix<u8> {
+        let mut seed = 0x1234_5678u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut xs = vec![0usize];
+        let mut x = 0usize;
+        while x < w {
+            x += 4 + (next() % 9) as usize;
+            xs.push(x.min(w));
+        }
+        let mut ys = vec![0usize];
+        let mut y = 0usize;
+        while y < h {
+            y += 4 + (next() % 9) as usize;
+            ys.push(y.min(h));
+        }
+        let mut data = vec![0u8; w * h];
+        for yy in 0..ys.len() - 1 {
+            for xx in 0..xs.len() - 1 {
+                let v = if (xx + yy) % 2 == 0 { 30u8 } else { 220u8 };
+                for py in ys[yy]..ys[yy + 1] {
+                    for px in xs[xx]..xs[xx + 1] {
+                        data[py * w + px] = v;
+                    }
+                }
+            }
+        }
+        let mut blurred = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (mut s, mut n) = (0u32, 0u32);
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let (sx, sy) = (x as i32 + dx, y as i32 + dy);
+                        if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                            s += u32::from(data[sy as usize * w + sx as usize]);
+                            n += 1;
+                        }
+                    }
+                }
+                blurred[y * w + x] = (s / n) as u8;
+            }
+        }
+        Matrix::<u8>::from_vec(h, w, 1, blurred)
+    }
+
+    fn shift_image(img: &Matrix<u8>, dx: i32, dy: i32) -> Matrix<u8> {
+        let (w, h) = (img.cols, img.rows);
+        let mut data = vec![0u8; w * h];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let (sx, sy) = (x - dx, y - dy);
+                if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                    data[(y as usize) * w + x as usize] = img.data[(sy as usize) * w + sx as usize];
+                }
+            }
+        }
+        Matrix::<u8>::from_vec(h, w, 1, data)
+    }
+
+    /// purecv#163: coarse pyramid levels must not fabricate gradients from
+    /// clamped window overhang. 21x21 window, 4 levels, zero-init initial
+    /// flow — pre-fix this gave rmse 28.8px with a +4.7px systematic y bias
+    /// on shift (10,0); OpenCV 5.0.0 scores rmse 0.0px on identical inputs.
+    /// The gate is on the mean error (2.5px), matching OpenCV's own spread
+    /// (worst mean component 0.42px across the same shift set).
+    // miri: 150-point pyramidal LK — too slow under interpretation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn test_lk_coarse_window_overhang_matches_opencv() {
+        let img0 = cell_texture(320, 240);
+        let mut pts = Vec::new();
+        for y in (40..200).step_by(16) {
+            for x in (40..280).step_by(16) {
+                pts.push(Point2f::new(x as f32, y as f32));
+            }
+        }
+        assert_eq!(pts.len(), 150);
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+        for (dx, dy) in [(0i32, 0i32), (10, 0), (0, 10), (10, 10)] {
+            let img1 = shift_image(&img0, dx, dy);
+            let (out, status, _) = calc_optical_flow_pyramid_lk(
+                &img0,
+                &img1,
+                &pts,
+                Some(&pts),
+                Size2i::new(21, 21),
+                3,
+                criteria,
+                OPTFLOW_USE_INITIAL_FLOW,
+                1e-4,
+            )
+            .unwrap();
+            let mut errs = Vec::new();
+            for (i, s) in status.iter().enumerate() {
+                if *s != 0 {
+                    errs.push((
+                        out[i].x - pts[i].x - dx as f32,
+                        out[i].y - pts[i].y - dy as f32,
+                    ));
+                }
+            }
+            assert!(!errs.is_empty(), "shift=({dx},{dy}): all points rejected");
+            let n = errs.len() as f32;
+            let mx = errs.iter().map(|e| e.0).sum::<f32>() / n;
+            let my = errs.iter().map(|e| e.1).sum::<f32>() / n;
+            assert!(
+                mx.abs() < 2.5 && my.abs() < 2.5,
+                "shift=({dx},{dy}): systematic bias ({mx:.3},{my:.3})px over {}/{}",
+                errs.len(),
+                pts.len()
+            );
+        }
     }
 }
