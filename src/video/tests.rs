@@ -40,8 +40,9 @@ mod video_tests {
     use crate::core::Matrix;
     use crate::imgproc::derivatives::scharr;
     use crate::video::optical_flow::{
-        build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, lk_iterate, FLT_SCALE,
-        LK_DET_EPSILON, OPTFLOW_LK_GET_MIN_EIGENVALS, OPTFLOW_USE_INITIAL_FLOW,
+        build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, lk_iterate, reflect101_index,
+        LkBounds, FLT_SCALE, LK_DET_EPSILON, OPTFLOW_LK_GET_MIN_EIGENVALS,
+        OPTFLOW_USE_INITIAL_FLOW,
     };
 
     // ------------------------------------------------------------------
@@ -1206,6 +1207,84 @@ mod video_tests {
             }
         }
         Matrix::<u8>::from_vec(h, w, 1, data)
+    }
+
+    /// Out-of-image bounds follow the window top-left corner, like OpenCV's
+    /// `inextPt = floor(nextPt - halfWin)`: with a 21px window (half 10.5)
+    /// on a 64px level, a search centre at x=70 has its corner at 59.5 and
+    /// stays tracked, while a centre at x=-15 has its corner at -25.5 and is
+    /// lost. Checking the centre instead is off by half a window in both
+    /// directions (wrongly rejects right/bottom edges, wrongly admits
+    /// left/top ones).
+    #[test]
+    fn test_lk_bounds_use_window_corner_not_centre() {
+        let run = |px: f64, is_finest: bool| {
+            let (_, _, tracked) = lk_iterate(
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                10,
+                1e-9,
+                Some(LkBounds {
+                    px,
+                    py: 32.0,
+                    half_w: 10.5,
+                    half_h: 10.5,
+                    min_x: -21.0,
+                    max_x: 64.0,
+                    min_y: -21.0,
+                    max_y: 64.0,
+                    is_finest,
+                }),
+                |_u, _v| (0.0, 0.0),
+            );
+            tracked
+        };
+        // Corner 59.5 inside [-21, 64): tracked at the finest level.
+        assert!(run(70.0, true));
+        // Corner -25.5 outside: lost at the finest level...
+        assert!(!run(-15.0, true));
+        // ...but only skipped (propagated) at coarser levels.
+        assert!(run(-15.0, false));
+        assert!(run(70.0, false));
+    }
+
+    /// `reflect101_index` must agree with the naive mirror loop and terminate
+    /// in O(1) on absurd coordinates (the loop form spins ~|i|/n times and
+    /// panics on `i32::MIN` in debug).
+    #[test]
+    fn test_reflect101_matches_mirror_loop_and_is_overflow_safe() {
+        for n in [1, 2, 3, 40, 64] {
+            for i in (-120..120).chain([
+                i32::MIN,
+                i32::MIN + 1,
+                -1_000_000_007,
+                1_000_000_007,
+                i32::MAX - 1,
+                i32::MAX,
+            ]) {
+                assert_eq!(
+                    reflect101_index(i, n),
+                    naive_reflect101(i, n),
+                    "i={i} n={n}"
+                );
+            }
+        }
+        fn naive_reflect101(i: i32, n: i32) -> usize {
+            if n <= 1 {
+                return 0;
+            }
+            // i64 math: no overflow, always terminates.
+            let period = (2 * n - 2) as i64;
+            let mut v = (i as i64).rem_euclid(period);
+            if v >= n as i64 {
+                v = period - v;
+            }
+            v as usize
+        }
     }
 
     /// purecv#163: coarse pyramid levels must not fabricate gradients from
