@@ -40,7 +40,8 @@ mod video_tests {
     use crate::core::Matrix;
     use crate::imgproc::derivatives::scharr;
     use crate::video::optical_flow::{
-        build_optical_flow_pyramid, calc_optical_flow_pyramid_lk, lk_iterate, FLT_SCALE,
+        bilinear_interp_const_zero, bilinear_interp_reflect, build_optical_flow_pyramid,
+        calc_optical_flow_pyramid_lk, lk_iterate, reflect101_index, LkBounds, FLT_SCALE,
         LK_DET_EPSILON, OPTFLOW_LK_GET_MIN_EIGENVALS, OPTFLOW_USE_INITIAL_FLOW,
     };
 
@@ -624,7 +625,7 @@ mod video_tests {
     #[test]
     fn test_lk_iterate_applies_oscillation_half_step() {
         let mut call = 0;
-        let (u, v) = lk_iterate(
+        let (u, v, tracked) = lk_iterate(
             1.0,  // h00
             0.0,  // h01
             1.0,  // h11
@@ -633,6 +634,7 @@ mod video_tests {
             0.0,  // init_v
             10,   // max_iters
             1e-9, // eps: tiny, never satisfied by these steps
+            None, // bounds: pin iteration math without image geometry
             |_u, _v| {
                 call += 1;
                 match call {
@@ -651,6 +653,7 @@ mod video_tests {
             (v - 0.25).abs() < 1e-9,
             "expected v = 0.25 (oscillation half-step fallback), got {v}"
         );
+        assert!(tracked, "unbounded walk must stay tracked");
     }
 
     /// Pins the determinant-degeneracy guard to OpenCV's scale. purecv#142:
@@ -1137,5 +1140,343 @@ mod video_tests {
             (u - sx).abs() < 0.02 && (v - sy).abs() < 0.02,
             "expected flow ({sx}, {sy}), got ({u}, {v})"
         );
+    }
+
+    /// Non-periodic pseudo-random cell texture (xorshift cells 4-12px,
+    /// 3x3 mean blur) with integer shifts, on a 150-point grid avoiding the
+    /// outer 40px border — the fixture behind purecv#163.
+    fn cell_texture(w: usize, h: usize) -> Matrix<u8> {
+        let mut seed = 0x1234_5678u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut xs = vec![0usize];
+        let mut x = 0usize;
+        while x < w {
+            x += 4 + (next() % 9) as usize;
+            xs.push(x.min(w));
+        }
+        let mut ys = vec![0usize];
+        let mut y = 0usize;
+        while y < h {
+            y += 4 + (next() % 9) as usize;
+            ys.push(y.min(h));
+        }
+        let mut data = vec![0u8; w * h];
+        for yy in 0..ys.len() - 1 {
+            for xx in 0..xs.len() - 1 {
+                let v = if (xx + yy) % 2 == 0 { 30u8 } else { 220u8 };
+                for py in ys[yy]..ys[yy + 1] {
+                    for px in xs[xx]..xs[xx + 1] {
+                        data[py * w + px] = v;
+                    }
+                }
+            }
+        }
+        let mut blurred = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (mut s, mut n) = (0u32, 0u32);
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let (sx, sy) = (x as i32 + dx, y as i32 + dy);
+                        if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                            s += u32::from(data[sy as usize * w + sx as usize]);
+                            n += 1;
+                        }
+                    }
+                }
+                blurred[y * w + x] = (s / n) as u8;
+            }
+        }
+        Matrix::<u8>::from_vec(h, w, 1, blurred)
+    }
+
+    fn shift_image(img: &Matrix<u8>, dx: i32, dy: i32) -> Matrix<u8> {
+        let (w, h) = (img.cols, img.rows);
+        let mut data = vec![0u8; w * h];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let (sx, sy) = (x - dx, y - dy);
+                if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                    data[(y as usize) * w + x as usize] = img.data[(sy as usize) * w + sx as usize];
+                }
+            }
+        }
+        Matrix::<u8>::from_vec(h, w, 1, data)
+    }
+
+    /// Out-of-image bounds follow the window top-left corner, like OpenCV's
+    /// `inextPt = floor(nextPt - halfWin)`: with a 21px window (half 10.5)
+    /// on a 64px level, a search centre at x=70 has its corner at 59.5 and
+    /// stays tracked, while a centre at x=-15 has its corner at -25.5 and is
+    /// lost. Checking the centre instead is off by half a window in both
+    /// directions (wrongly rejects right/bottom edges, wrongly admits
+    /// left/top ones).
+    #[test]
+    fn test_lk_bounds_use_window_corner_not_centre() {
+        let run = |px: f64, is_finest: bool| {
+            let (_, _, tracked) = lk_iterate(
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                10,
+                1e-9,
+                Some(LkBounds {
+                    px,
+                    py: 32.0,
+                    half_w: 10.5,
+                    half_h: 10.5,
+                    min_x: -21.0,
+                    max_x: 64.0,
+                    min_y: -21.0,
+                    max_y: 64.0,
+                    is_finest,
+                }),
+                |_u, _v| (0.0, 0.0),
+            );
+            tracked
+        };
+        // Corner 59.5 inside [-21, 64): tracked at the finest level.
+        assert!(run(70.0, true));
+        // Corner -25.5 outside: lost at the finest level...
+        assert!(!run(-15.0, true));
+        // ...but only skipped (propagated) at coarser levels.
+        assert!(run(-15.0, false));
+        assert!(run(70.0, false));
+    }
+
+    /// `reflect101_index` must agree with the naive mirror loop and terminate
+    /// in O(1) on absurd coordinates (the loop form spins ~|i|/n times and
+    /// panics on `i32::MIN` in debug).
+    #[test]
+    fn test_reflect101_matches_mirror_loop_and_is_overflow_safe() {
+        for n in [1, 2, 3, 40, 64] {
+            for i in (-120..120).chain([
+                i32::MIN,
+                i32::MIN + 1,
+                -1_000_000_007,
+                1_000_000_007,
+                i32::MAX - 1,
+                i32::MAX,
+            ]) {
+                assert_eq!(
+                    reflect101_index(i, n),
+                    naive_reflect101(i, n),
+                    "i={i} n={n}"
+                );
+            }
+        }
+        fn naive_reflect101(i: i32, n: i32) -> usize {
+            if n <= 1 {
+                return 0;
+            }
+            // i64 math: no overflow, always terminates.
+            let period = (2 * n - 2) as i64;
+            let mut v = (i as i64).rem_euclid(period);
+            if v >= n as i64 {
+                v = period - v;
+            }
+            v as usize
+        }
+    }
+
+    /// purecv#163: coarse pyramid levels must not fabricate gradients from
+    /// clamped window overhang. 21x21 window, 4 levels, zero-init initial
+    /// flow — pre-fix this gave rmse 28.8px with a +4.7px systematic y bias
+    /// on shift (10,0); OpenCV 4.10.0 scores rmse 0.0px on identical inputs.
+    /// The gate is on the mean error (2.5px), matching OpenCV's own spread
+    /// (worst mean component 0.42px across the same shift set).
+    // miri: 150-point pyramidal LK — too slow under interpretation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn test_lk_coarse_window_overhang_matches_opencv() {
+        let img0 = cell_texture(320, 240);
+        let mut pts = Vec::new();
+        for y in (40..200).step_by(16) {
+            for x in (40..280).step_by(16) {
+                pts.push(Point2f::new(x as f32, y as f32));
+            }
+        }
+        assert_eq!(pts.len(), 150);
+        let criteria = TermCriteria::new(TermType::Both, 30, 0.01);
+        for (dx, dy) in [(0i32, 0i32), (10, 0), (0, 10), (10, 10)] {
+            let img1 = shift_image(&img0, dx, dy);
+            let (out, status, _) = calc_optical_flow_pyramid_lk(
+                &img0,
+                &img1,
+                &pts,
+                Some(&pts),
+                Size2i::new(21, 21),
+                3,
+                criteria,
+                OPTFLOW_USE_INITIAL_FLOW,
+                1e-4,
+            )
+            .unwrap();
+            let mut errs = Vec::new();
+            for (i, s) in status.iter().enumerate() {
+                if *s != 0 {
+                    errs.push((
+                        out[i].x - pts[i].x - dx as f32,
+                        out[i].y - pts[i].y - dy as f32,
+                    ));
+                }
+            }
+            assert!(!errs.is_empty(), "shift=({dx},{dy}): all points rejected");
+            let n = errs.len() as f32;
+            let mx = errs.iter().map(|e| e.0).sum::<f32>() / n;
+            let my = errs.iter().map(|e| e.1).sum::<f32>() / n;
+            assert!(
+                mx.abs() < 2.5 && my.abs() < 2.5,
+                "shift=({dx},{dy}): systematic bias ({mx:.3},{my:.3})px over {}/{}",
+                errs.len(),
+                pts.len()
+            );
+        }
+    }
+
+    /// Extreme caller coordinates must be marked lost before any window samples
+    /// are read, including the SIMD path that gathers intensities eagerly.
+    #[test]
+    fn test_lk_extreme_template_coordinates_are_lost() {
+        let image = quadratic_bowl();
+        let mut points = vec![Point2f::new(16.0, 16.0)];
+        for coordinate in [
+            3e9,
+            -3e9,
+            f32::MAX,
+            f32::MIN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ] {
+            points.push(Point2f::new(coordinate, 16.0));
+            points.push(Point2f::new(16.0, coordinate));
+        }
+        for max_level in [0, 2] {
+            for flags in [0, OPTFLOW_LK_GET_MIN_EIGENVALS] {
+                let (out, status, errors) = calc_optical_flow_pyramid_lk(
+                    &image,
+                    &image,
+                    &points,
+                    None,
+                    Size2i::new(5, 5),
+                    max_level,
+                    TermCriteria::new(TermType::Count, 4, 0.0),
+                    flags,
+                    1e-4,
+                )
+                .unwrap();
+                assert_eq!(status[0], 1);
+                assert_eq!(out[0], points[0]);
+                assert!(status[1..].iter().all(|&s| s == 0));
+                assert!(errors[1..].iter().all(|&e| e == f32::MAX));
+            }
+        }
+    }
+
+    /// An invalid initial estimate must not reach sampling or report success.
+    #[test]
+    fn test_lk_extreme_initial_flow_coordinates_are_lost() {
+        let image = quadratic_bowl();
+        let mut guesses = vec![Point2f::new(16.0, 16.0)];
+        for coordinate in [
+            3e9,
+            -3e9,
+            f32::MAX,
+            f32::MIN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ] {
+            guesses.push(Point2f::new(coordinate, 16.0));
+            guesses.push(Point2f::new(16.0, coordinate));
+        }
+        let points = vec![Point2f::new(16.0, 16.0); guesses.len()];
+        for max_level in [0, 2] {
+            for error_flag in [0, OPTFLOW_LK_GET_MIN_EIGENVALS] {
+                let (out, status, errors) = calc_optical_flow_pyramid_lk(
+                    &image,
+                    &image,
+                    &points,
+                    Some(&guesses),
+                    Size2i::new(5, 5),
+                    max_level,
+                    TermCriteria::new(TermType::Count, 4, 0.0),
+                    OPTFLOW_USE_INITIAL_FLOW | error_flag,
+                    1e-4,
+                )
+                .unwrap();
+                assert_eq!(status[0], 1);
+                assert_eq!(out, points);
+                assert!(status[1..].iter().all(|&s| s == 0));
+                assert!(errors[1..].iter().all(|&e| e == f32::MAX));
+            }
+        }
+    }
+
+    /// Keep the samplers overflow-safe independently of the caller's bounds gate.
+    #[test]
+    fn test_lk_extreme_sampler_coordinates_do_not_overflow() {
+        let image = Matrix::from_vec(2, 2, 1, vec![10.0, 20.0, 30.0, 40.0]);
+        for coordinate in [3e9, -3e9, f32::MAX, f32::MIN] {
+            for (x, y) in [(coordinate, 0.5), (0.5, coordinate)] {
+                assert_eq!(bilinear_interp_const_zero(&image, x, y), 0.0);
+                let reflected = bilinear_interp_reflect(&image, x, y);
+                assert!((10.0..=40.0).contains(&reflected));
+            }
+        }
+        // The reflection period itself must be computed in widened arithmetic.
+        assert_eq!(reflect101_index(i32::MAX, i32::MAX), i32::MAX as usize - 2);
+        assert_eq!(
+            reflect101_index(i32::MAX - 1, i32::MAX),
+            i32::MAX as usize - 1
+        );
+    }
+
+    /// Non-finite estimates must not enter the mismatch sampling callback.
+    #[test]
+    fn test_lk_extreme_search_estimates_skip_sampling() {
+        for coordinate in [3e9, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            for (u, v) in [(coordinate, 0.0), (0.0, coordinate)] {
+                for is_finest in [false, true] {
+                    let mut sampled = false;
+                    let (_, _, tracked) = lk_iterate(
+                        1.0,
+                        0.0,
+                        1.0,
+                        1.0,
+                        u,
+                        v,
+                        2,
+                        0.0,
+                        Some(LkBounds {
+                            px: 16.0,
+                            py: 16.0,
+                            half_w: 2.0,
+                            half_h: 2.0,
+                            min_x: -5.0,
+                            max_x: 32.0,
+                            min_y: -5.0,
+                            max_y: 32.0,
+                            is_finest,
+                        }),
+                        |_, _| {
+                            sampled = true;
+                            (0.0, 0.0)
+                        },
+                    );
+                    assert!(!sampled);
+                    assert_eq!(tracked, !is_finest);
+                }
+            }
+        }
     }
 }
