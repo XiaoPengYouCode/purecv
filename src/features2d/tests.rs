@@ -34,8 +34,19 @@
  *
  */
 
-use crate::core::types::Point2f;
+use super::orb_opencv_ref::{
+    ORB_REF_DESCRIPTORS, ORB_REF_HEIGHT, ORB_REF_IMAGE_FNV1A, ORB_REF_KEYPOINTS, ORB_REF_WIDTH,
+};
+use crate::core::error::PureCvError;
+use crate::core::types::{BorderTypes, Point2f};
+use crate::core::Matrix;
+use crate::features2d::orb::{
+    compute_orientation, harris_at, level_scale, precompute_umax, PYRAMID_BUILDS,
+};
 use crate::features2d::KeyPoint;
+use crate::features2d::{
+    compute_orb_descriptor, FastFeatureDetector, FastType, Orb, ScoreType, BIT_PATTERN_31,
+};
 
 #[test]
 fn test_keypoint_default() {
@@ -631,4 +642,532 @@ fn test_drawing_primitives() {
     .unwrap();
     assert_eq!(drawn_matches.rows, 10);
     assert_eq!(drawn_matches.cols, 20); // 10 + 10
+}
+
+#[test]
+fn test_orb_level_scales_match_opencv_f64_scales() {
+    // (float)pow((double)1.2f, n), as OpenCV's getScale computes it (base 1.2000000476837158,
+    // not 1.2); equal to the f64 product rounded once. Cross-checked against opencv.js keypoint
+    // sizes (31 * layerScale), e.g. octave 3 = 53.5680046, which only 0x3fdd2f1c produces.
+    let want = [
+        0x3f80_0000u32,
+        0x3f99_999a,
+        0x3fb8_51ec,
+        0x3fdd_2f1c,
+        0x4004_b5de,
+        0x401f_40a5,
+        0x403f_1a60,
+        0x4065_52da,
+    ];
+    for (n, w) in want.iter().enumerate() {
+        // black_box: a constant exponent is folded at compile time and hides the runtime bug.
+        assert_eq!(
+            level_scale(1.2, std::hint::black_box(n as i32)).to_bits(),
+            *w,
+            "level {n}"
+        );
+    }
+}
+
+#[test]
+fn test_compute_orientation_never_returns_360() {
+    // 64x64 zero image, all pixels with x in 33..64 (every row) set to 255, then pixel
+    // (33, 33) dimmed to 254 (one below the bright plateau). This gives m_01 = -1 and
+    // m_10 = 4_783_544, above the 3_754_937 threshold at which today's f32 atan2/degrees
+    // formula rounds to exactly 360.0 (verified on Windows and Linux).
+    let mut img = Matrix::<u8>::new(64, 64, 1);
+    for y in 0..64 {
+        for x in 33..64 {
+            img.set(y, x, 0, 255);
+        }
+    }
+    img.set(33, 33, 0, 254);
+    let angle = compute_orientation(&img, 32, 32, 61, &precompute_umax(30)).unwrap();
+    assert!((0.0..360.0).contains(&angle), "angle = {angle}");
+}
+
+#[test]
+fn test_harris_at_matches_corner_harris_everywhere() {
+    for (rows, cols, seed) in [(17, 23, 9u64), (9, 12, 3)] {
+        let img = lcg_textured(rows, cols, seed);
+        let full =
+            crate::imgproc::corner_harris(&img, 3, 3, 0.04, BorderTypes::Reflect101).unwrap();
+        for y in 0..rows {
+            for x in 0..cols {
+                let want = *full.get(y, x, 0).unwrap();
+                assert_eq!(harris_at(&img, x, y).to_bits(), want.to_bits(), "({x},{y})");
+            }
+        }
+    }
+}
+
+fn kp_at(x: f32, y: f32) -> KeyPoint {
+    KeyPoint::new(Point2f::new(x, y), 31.0, 0.0, 0.0, 0, -1)
+}
+
+#[test]
+fn test_orb_rejects_unsupported_first_level() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    let mut orb = Orb::default();
+    orb.set_first_level(1);
+    assert!(matches!(
+        orb.detect(&img),
+        Err(PureCvError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        orb.detect_and_compute(&img),
+        Err(PureCvError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        orb.compute(&img, &[kp_at(8.0, 8.0)]),
+        Err(PureCvError::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn test_orb_rejects_unsupported_wta_k_for_descriptors() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    for wta_k in [0, 1, 3, 4, 5] {
+        let mut orb = Orb::default();
+        orb.set_wta_k(wta_k);
+        assert!(
+            matches!(
+                orb.compute(&img, &[kp_at(8.0, 8.0)]),
+                Err(PureCvError::InvalidInput(_))
+            ),
+            "{wta_k}"
+        );
+        assert!(
+            matches!(
+                orb.detect_and_compute(&img),
+                Err(PureCvError::InvalidInput(_))
+            ),
+            "{wta_k}"
+        );
+    }
+}
+
+#[test]
+fn test_orb_rejects_bad_patch_size() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    for p in [0usize, 1] {
+        // OpenCV: CV_Assert(patchSize >= 2); today precompute_umax(0) underflows
+        let mut orb = Orb::default();
+        orb.set_patch_size(p);
+        assert!(
+            matches!(orb.detect(&img), Err(PureCvError::InvalidInput(_))),
+            "{p}"
+        );
+    }
+    let mut orb = Orb::default();
+    orb.set_patch_size(21);
+    assert!(matches!(
+        orb.compute(&img, &[kp_at(8.0, 8.0)]),
+        Err(PureCvError::InvalidInput(_))
+    ));
+    let kp = kp_at(8.0, 8.0);
+    assert!(matches!(
+        compute_orb_descriptor(&img, &kp, 21, &BIT_PATTERN_31),
+        Err(PureCvError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        compute_orb_descriptor(&img, &kp, 31, &BIT_PATTERN_31[..1000]),
+        Err(PureCvError::InvalidInput(_))
+    ));
+}
+
+// miri: two full `detect` runs on 120x160 (see the Miri bounds in Global Constraints). No `unsafe`.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_detect_ignores_descriptor_only_params() {
+    let img = lcg_textured(120, 160, 1);
+    let mut orb = Orb::default();
+    orb.set_wta_k(4); // like OpenCV, detect accepts it
+    assert!(orb.detect(&img).is_ok());
+    orb.set_wta_k(2);
+    orb.set_patch_size(21); // orientation honours any patch_size >= 2
+    assert!(orb.detect(&img).is_ok());
+}
+
+struct Lcg(u64);
+impl Lcg {
+    fn next_u32(&mut self) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 33) as u32
+    }
+    fn below(&mut self, n: u32) -> u32 {
+        self.next_u32() % n
+    }
+}
+/// Mid-gray background, 500 filled rectangles (side 4..=63, value 0..=255), then ±6 noise.
+fn lcg_textured(rows: usize, cols: usize, seed: u64) -> Matrix<u8> {
+    let mut rng = Lcg(seed);
+    let mut buf = vec![128i32; rows * cols];
+    for _ in 0..500 {
+        let w = 4 + rng.below(60) as usize;
+        let h = 4 + rng.below(60) as usize;
+        let x0 = rng.below(cols as u32) as usize;
+        let y0 = rng.below(rows as u32) as usize;
+        let v = rng.below(256) as i32;
+        for y in y0..(y0 + h).min(rows) {
+            for x in x0..(x0 + w).min(cols) {
+                buf[y * cols + x] = v;
+            }
+        }
+    }
+    let mut img = Matrix::<u8>::new(rows, cols, 1);
+    for (d, s) in img.data.iter_mut().zip(buf.iter()) {
+        *d = (s + rng.below(13) as i32 - 6).clamp(0, 255) as u8;
+    }
+    img
+}
+
+/// Standard FNV-1a, 32-bit: offset basis `0x811c_9dc5`, prime `0x0100_0193`.
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// One FNV-1a stream over `kps` in order: for each keypoint, the 24 little-endian bytes of
+/// `pt.x`, `pt.y`, `size`, `angle`, `response` (each `to_bits()`), then `octave`.
+fn keypoints_fnv(kps: &[KeyPoint]) -> u32 {
+    let mut bytes = Vec::with_capacity(kps.len() * 24);
+    for kp in kps {
+        bytes.extend_from_slice(&kp.pt.x.to_bits().to_le_bytes());
+        bytes.extend_from_slice(&kp.pt.y.to_bits().to_le_bytes());
+        bytes.extend_from_slice(&kp.size.to_bits().to_le_bytes());
+        bytes.extend_from_slice(&kp.angle.to_bits().to_le_bytes());
+        bytes.extend_from_slice(&kp.response.to_bits().to_le_bytes());
+        bytes.extend_from_slice(&kp.octave.to_le_bytes());
+    }
+    fnv1a32(&bytes)
+}
+
+/// Golden values for `Orb::default()` on `lcg_textured(480, 640, 42)` (per-octave keypoint
+/// counts 109, 90, 75, 63, 52, 44, 36, 31). Measured on Windows and WSL Linux, in the default,
+/// `--no-default-features --features std`, and `--features simd,parallel` configurations.
+const ORB_GOLDEN_COUNT: usize = 500;
+const ORB_GOLDEN_KEYPOINTS_FNV: u32 = 0x6d03_920c;
+const ORB_GOLDEN_DESCRIPTORS_FNV: u32 = 0xf88b_0f8e;
+
+/// Golden values for `Orb::new(300, 1.5, 4, 20, 0, 2, ScoreType::Fast, 31, 15)` on
+/// `lcg_textured(240, 320, 11)`. Measured on Windows and WSL Linux, in the default,
+/// `--no-default-features --features std`, and `--features simd,parallel` configurations.
+const ORB_GOLDEN_COUNT_FAST_PARAMS: usize = 300;
+const ORB_GOLDEN_KEYPOINTS_FNV_FAST_PARAMS: u32 = 0x47a5_4378;
+const ORB_GOLDEN_DESCRIPTORS_FNV_FAST_PARAMS: u32 = 0xabcf_9ade;
+
+// miri: full ORB detect_and_compute on a 640x480 image is far heavier than
+// test_orb_full_pipeline (100x100, ~806s under interpretation). No `unsafe` on this path.
+// See .agents/MIRI_PLAN.md §4.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_detect_and_compute_golden() {
+    let img = lcg_textured(480, 640, 42);
+    let orb = Orb::default();
+    let (kps, desc) = orb.detect_and_compute(&img).unwrap();
+    assert_eq!(kps.len(), ORB_GOLDEN_COUNT, "keypoint count");
+    assert_eq!(
+        keypoints_fnv(&kps),
+        ORB_GOLDEN_KEYPOINTS_FNV,
+        "keypoints fnv"
+    );
+    assert_eq!(
+        fnv1a32(&desc.data),
+        ORB_GOLDEN_DESCRIPTORS_FNV,
+        "descriptors fnv"
+    );
+}
+
+// miri: full ORB detect_and_compute on a 320x240 image is far heavier than
+// test_orb_full_pipeline (100x100, ~806s under interpretation). No `unsafe` on this path.
+// See .agents/MIRI_PLAN.md §4.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_detect_and_compute_golden_fast_params() {
+    let img = lcg_textured(240, 320, 11);
+    let orb = Orb::new(300, 1.5, 4, 20, 0, 2, ScoreType::Fast, 31, 15);
+    let (kps, desc) = orb.detect_and_compute(&img).unwrap();
+    assert_eq!(kps.len(), ORB_GOLDEN_COUNT_FAST_PARAMS, "keypoint count");
+    assert_eq!(
+        keypoints_fnv(&kps),
+        ORB_GOLDEN_KEYPOINTS_FNV_FAST_PARAMS,
+        "keypoints fnv"
+    );
+    assert_eq!(
+        fnv1a32(&desc.data),
+        ORB_GOLDEN_DESCRIPTORS_FNV_FAST_PARAMS,
+        "descriptors fnv"
+    );
+}
+
+#[test]
+fn test_orb_detect_and_compute_builds_pyramid_once() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    PYRAMID_BUILDS.with(|c| c.set(0));
+    Orb::default().detect_and_compute(&img).unwrap();
+    assert_eq!(PYRAMID_BUILDS.with(|c| c.get()), 1);
+}
+
+// miri: two full ORB pipelines on 240x320. No `unsafe`.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_detect_and_compute_equals_detect_then_compute() {
+    let img = lcg_textured(240, 320, 7);
+    let orb = Orb::default();
+    let (kps, desc) = orb.detect_and_compute(&img).unwrap();
+    let kps2 = orb.detect(&img).unwrap();
+    assert_eq!(kps, kps2);
+    assert_eq!(desc.data, orb.compute(&img, &kps2).unwrap().data);
+}
+
+#[test]
+fn test_orb_compute_rejects_out_of_range_octave() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    for octave in [-1, 8] {
+        // nlevels is 8
+        let kp = [KeyPoint::new(
+            Point2f::new(8.0, 8.0),
+            31.0,
+            0.0,
+            0.0,
+            octave,
+            -1,
+        )];
+        assert!(
+            matches!(
+                Orb::default().compute(&img, &kp),
+                Err(PureCvError::InvalidInput(_))
+            ),
+            "{octave}"
+        );
+    }
+}
+
+#[test]
+fn test_orb_compute_empty_keypoints() {
+    let img = Matrix::<u8>::new(16, 16, 1);
+    let desc = Orb::default().compute(&img, &[]).unwrap();
+    assert_eq!((desc.rows, desc.cols), (0, 32));
+    let mut orb = Orb::default();
+    orb.set_wta_k(4);
+    assert!(
+        orb.compute(&img, &[]).is_err(),
+        "parameters are validated even with no keypoints"
+    );
+}
+
+#[test]
+fn test_orb_tiny_images() {
+    let mut orb = Orb::default();
+    orb.set_nlevels(20);
+    assert!(matches!(
+        orb.detect_and_compute(&Matrix::<u8>::new(10, 10, 1)),
+        Err(PureCvError::InvalidInput(_))
+    ));
+    let tiny = lcg_textured(12, 12, 1); // valid: levels shrink to 3x3
+    let (kps, desc) = Orb::default().detect_and_compute(&tiny).unwrap();
+    assert_eq!((kps.len(), desc.rows, desc.cols), (0, 0, 32));
+    let kp = [KeyPoint::new(
+        Point2f::new(6.0, 6.0),
+        31.0,
+        10.0,
+        0.0,
+        7,
+        -1,
+    )];
+    assert_eq!(Orb::default().compute(&tiny, &kp).unwrap().rows, 1);
+}
+
+#[test]
+fn test_orb_rejects_multichannel_before_params() {
+    let img = Matrix::<u8>::new(16, 16, 3);
+    let mut orb = Orb::default();
+    orb.set_wta_k(4);
+    for r in [
+        orb.detect(&img).map(|_| ()),
+        orb.compute(&img, &[]).map(|_| ()),
+        orb.detect_and_compute(&img).map(|_| ()),
+    ] {
+        assert!(r.unwrap_err().to_string().contains("grayscale"));
+    }
+}
+
+// ---- purecv#124: OpenCV reference descriptors (fixture: orb_opencv_ref.rs) ----
+
+/// "lowbias32" integer hash; twin of `hash32()` in scripts/opencv_ref/gen_orb_descriptors.js.
+fn orb_ref_hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^ (x >> 16)
+}
+
+/// Deterministic textured reference image; twin of `pixel()` in the generator script.
+fn orb_ref_image() -> Matrix<u8> {
+    let (w, h) = (ORB_REF_WIDTH as u32, ORB_REF_HEIGHT as u32);
+    let mut data = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let coarse = orb_ref_hash32(((y >> 3) * 64 + (x >> 3)) ^ 0x9e37_79b9) & 0xff;
+            let fine = orb_ref_hash32((y * w + x) ^ 0x85eb_ca6b) & 0x3f;
+            let mut v = ((coarse * 3) >> 2) + fine;
+            if (20..84).contains(&x) && (28..92).contains(&y) {
+                v = 255 - v;
+            }
+            if (100..172).contains(&x) && (56..124).contains(&y) {
+                v = (v >> 1) + 96;
+            }
+            if (48..144).contains(&x) && (132..176).contains(&y) {
+                v ^= 0x5a;
+            }
+            data.push((v & 0xff) as u8);
+        }
+    }
+    Matrix::from_vec(h as usize, w as usize, 1, data)
+}
+
+// miri: generates and hashes a 36,864-pixel image twice. No `unsafe`.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_ref_image_matches_generator() {
+    assert_eq!(fnv1a32(&orb_ref_image().data), ORB_REF_IMAGE_FNV1A);
+}
+
+/// purecv#124: `Orb::compute` must smooth the level (7x7, sigma 2, `BORDER_REFLECT_101`) before
+/// steered BRIEF, as OpenCV does. Measured: mean 50.6 / max 74 bits without the blur, mean 1.15
+/// / max 3 with it (0 with a rounding blur).
+// miri: pyramid + 7x7 blur of 192x192. No `unsafe`.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_compute_matches_opencv_reference() {
+    let img = orb_ref_image();
+    let kps: Vec<KeyPoint> = ORB_REF_KEYPOINTS
+        .iter()
+        .map(|&(x, y, a)| KeyPoint::new(Point2f::new(x, y), 31.0, f32::from_bits(a), 0.0, 0, -1))
+        .collect();
+    let desc = Orb::default().compute(&img, &kps).unwrap();
+    let dist: Vec<u32> = desc
+        .data
+        .chunks_exact(32)
+        .zip(ORB_REF_DESCRIPTORS.iter())
+        .map(|(r, o)| r.iter().zip(o).map(|(a, b)| (a ^ b).count_ones()).sum())
+        .collect();
+    let mean = dist.iter().sum::<u32>() as f64 / dist.len() as f64;
+    let max = *dist.iter().max().unwrap();
+    println!("ORB vs OpenCV 4.10: mean {mean:.2} bits, max {max}");
+    // Measured: 0 bits with a rounding blur; mean 1.15 / max 3 with today's truncating
+    // gaussian_blur; mean 50.6 / max 74 without any blur.
+    assert!(
+        max <= 10 && mean <= 2.5,
+        "mean {mean:.2}, max {max}, per keypoint {dist:?}"
+    );
+}
+
+/// purecv#124: only the pyramid levels descriptors are sampled from get blurred; detection
+/// (FAST/Harris/orientation, exercised via `detect_and_compute` elsewhere) keeps using the
+/// unblurred pyramid. This checks every octave gets its own 7x7/sigma=2/Reflect101 blur.
+// miri: 8-level pyramid + 8 blurs on 240x320. No `unsafe`.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn test_orb_compute_blurs_the_keypoint_octave_level() {
+    use crate::core::types::Size2i;
+    use crate::features2d::build_orb_pyramid;
+    use crate::imgproc::gaussian_blur;
+
+    let img = lcg_textured(240, 320, 5);
+    let pyr = build_orb_pyramid(&img, 8, 1.2).unwrap();
+    let kps: Vec<KeyPoint> = (0..8)
+        .map(|o| {
+            let s = level_scale(1.2, o);
+            let l = &pyr[o as usize];
+            KeyPoint::new(
+                Point2f::new((l.cols / 2) as f32 * s, (l.rows / 2) as f32 * s),
+                31.0,
+                30.0,
+                0.0,
+                o,
+                -1,
+            )
+        })
+        .collect();
+    let desc = Orb::default().compute(&img, &kps).unwrap();
+    for (o, kp) in kps.iter().enumerate() {
+        let blurred = gaussian_blur(
+            &pyr[o],
+            Size2i::new(7, 7),
+            2.0,
+            2.0,
+            BorderTypes::Reflect101,
+        )
+        .unwrap();
+        let s = level_scale(1.2, o as i32);
+        let mut lk = kp.clone();
+        lk.pt.x /= s;
+        lk.pt.y /= s;
+        let want = compute_orb_descriptor(&blurred, &lk, 31, &BIT_PATTERN_31).unwrap();
+        assert_eq!(&desc.data[o * 32..o * 32 + 32], &want[..], "octave {o}");
+    }
+}
+
+// Guard against porting jsfeat's per-row FAST candidate-buffer bug (#136): jsfeat
+// writes candidates into a per-row buffer 1-based but reads it back 0-based, so
+// each row's last detectable candidate is silently dropped. purecv's FAST scans a
+// full score map and has no such buffer, so this is not a fix for purecv — it is a
+// regression guard that must keep passing if a future refactor ever introduces a
+// similar per-row buffer. `28 = cols - 4` is the right-most column `Type9_16` can
+// detect and `16 = rows - 4` is the bottom-most detectable row; expected detections
+// were cross-checked against opencv.js (same 11 points).
+#[test]
+fn test_fast_keeps_last_candidate_of_each_row() {
+    let rows = 20;
+    let cols = 32;
+    let background = 20u8;
+    let dot = 220u8;
+    let dot_coords: [(usize, usize); 11] = [
+        (3, 3),
+        (15, 3),
+        (28, 3),
+        (28, 8),
+        (3, 12),
+        (9, 12),
+        (15, 12),
+        (21, 12),
+        (28, 12),
+        (3, 16),
+        (28, 16),
+    ];
+
+    let mut data = vec![background; rows * cols];
+    for &(x, y) in &dot_coords {
+        data[y * cols + x] = dot;
+    }
+    let img = Matrix::<u8>::from_vec(rows, cols, 1, data);
+
+    let mut expected: Vec<(usize, usize)> = dot_coords.to_vec();
+    expected.sort_by_key(|&(x, y)| (y, x));
+
+    for nonmax in [true, false] {
+        let detector = FastFeatureDetector::new(20, nonmax, FastType::Type9_16);
+        let keypoints = detector.detect(&img).unwrap();
+
+        let mut detected: Vec<(usize, usize)> = keypoints
+            .iter()
+            .map(|kp| (kp.pt.x.round() as usize, kp.pt.y.round() as usize))
+            .collect();
+        detected.sort_by_key(|&(x, y)| (y, x));
+
+        assert_eq!(
+            detected, expected,
+            "nonmax={nonmax}: detected keypoints do not match the expected dot coordinates"
+        );
+    }
 }
